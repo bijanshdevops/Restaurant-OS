@@ -1,0 +1,6 @@
+export enum StationType {
+  GRILL = 'GRILL',
+  COLD_STATION = 'COLD_STATION',
+  BEVERAGE = 'BEVERAGE',
+  FRY_STATION = 'FRY_STATION'
+}

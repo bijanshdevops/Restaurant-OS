@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: ../
+      dockerfile: Dockerfile
+    container_name: restaurant-os-app
+    restart: unless-stopped
+    ports:
+      - "8080:3000"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://restaurant:secure_password_here@db:5432/restaurant_os?schema=public
+      - CRON_SECRET=super_secret_cron_key
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - restaurant-network
+
+  db:
+    image: postgres:15-alpine
+    container_name: restaurant-os-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=restaurant
+      - POSTGRES_PASSWORD=secure_password_here
+      - POSTGRES_DB=restaurant_os
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U restaurant -d restaurant_os"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - restaurant-network
+
+networks:
+  restaurant-network:
+    driver: bridge
+
+volumes:
+  pgdata:

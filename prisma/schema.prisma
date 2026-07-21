@@ -1,0 +1,133 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  username  String   @unique
+  password  String
+  roles     Role[]   @default([CASHIER])
+  createdAt DateTime @default(now())
+}
+
+enum Role {
+  ADMIN
+  CASHIER
+  CHEF
+  ACCOUNTANT
+  INVENTORY_MANAGER
+}
+
+model MenuItem {
+  id          String      @id @default(cuid())
+  title       String
+  category    String
+  subCategory String?
+  price       Float
+  imageUrl    String?
+  isAvailable Boolean     @default(true)
+  ingredients String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @default(now()) @updatedAt
+  orderItems  OrderItem[]
+}
+
+model Order {
+  id          String      @id @default(uuid())
+  orderNumber String      @unique
+  status      OrderStatus @default(PENDING)
+  totalAmount Float
+  createdAt   DateTime    @default(now())
+  items       OrderItem[]
+}
+
+enum OrderStatus {
+  PENDING
+  PREPARING
+  READY
+  COMPLETED
+}
+
+model OrderItem {
+  id          String   @id @default(uuid())
+  orderId     String
+  menuItemId  String
+  quantity    Int
+  priceAtTime Float
+  
+  order       Order    @relation(fields: [orderId], references: [id])
+  menuItem    MenuItem @relation(fields: [menuItemId], references: [id])
+}
+
+model InventoryItem {
+  id            String   @id @default(uuid())
+  name          String
+  category      String
+  unit          String
+  currentStock  Float    @default(0)
+  minStockLevel Float    @default(0)
+  lastRestocked DateTime @default(now())
+}
+
+model Customer {
+  id          String      @id @default(uuid())
+  fullName    String
+  phone       String      @unique
+  totalOrders Int         @default(0)
+  totalSpent  Float       @default(0)
+  loyaltyTier LoyaltyTier @default(NORMAL)
+  lastVisit   DateTime    @default(now()) @updatedAt
+}
+
+enum LoyaltyTier {
+  NORMAL
+  BRONZE
+  SILVER
+  GOLD
+  VIP
+}
+
+model Transaction {
+  id          String          @id @default(uuid())
+  type        TransactionType
+  description String
+  amount      Float
+  createdAt   DateTime        @default(now())
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+}
+
+model Printer {
+  id             String      @id @default(uuid())
+  name           String
+  type           PrinterType
+  connectionType PrinterConnectionType @default(NETWORK)
+  
+  ipAddress      String?
+  port           Int?        @default(9100)
+  
+  path           String?
+
+  isActive       Boolean     @default(true)
+  createdAt      DateTime    @default(now())
+}
+
+enum PrinterType {
+  CASHIER
+  KITCHEN
+}
+
+enum PrinterConnectionType {
+  NETWORK
+  USB
+  BLUETOOTH
+}

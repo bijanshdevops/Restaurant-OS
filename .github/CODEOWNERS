@@ -1,0 +1,36 @@
+# CODEOWNERS
+
+# Global default — Architecture Board reviews all root files
+*                              @architecture-board
+
+# Documentation
+docs/                          @architecture-board
+docs/00-product/               @product-owner @architecture-board
+docs/01-domain/                @domain-architects @architecture-board
+docs/02-architecture/          @principal-architect @architecture-board
+docs/03-security/              @security-architect @architecture-board
+docs/04-platform/              @platform-lead @architecture-board
+docs/05-api/                   @api-guild-lead @architecture-board
+docs/06-ui/                    @ui-lead @architecture-board
+docs/07-devops/                @sre-lead @architecture-board
+docs/08-quality/               @architecture-board
+docs/09-decisions/             @architecture-board
+
+# Architecture assets
+architecture/                  @principal-architect @architecture-board
+
+# Decisions
+adr/                           @architecture-board
+rfc/                           @architecture-board
+
+# Standards
+standards/                     @architecture-board
+
+# Governance
+governance/                    @architecture-board
+
+# Specifications
+specs/                         @architecture-board
+
+# Templates
+templates/                     @architecture-board

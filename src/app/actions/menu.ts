@@ -67,6 +67,39 @@ export async function updateMenuItem(id: string, data: {
   }
 }
 
+export async function createMenuItemsBulk(items: {
+  title: string;
+  price: number;
+  category: string;
+  subCategory?: string;
+  imageUrl?: string;
+  ingredients?: string;
+}[]) {
+  try {
+    const validItems = items.filter((i) => i.title && i.price > 0);
+
+    if (validItems.length === 0) {
+      return { success: false, error: 'هیچ ردیف معتبری برای وارد کردن یافت نشد' };
+    }
+
+    const result = await prisma.menuItem.createMany({
+      data: validItems.map((i) => ({
+        title: i.title,
+        price: i.price,
+        category: i.category || 'غذا',
+        subCategory: i.subCategory || null,
+        imageUrl: i.imageUrl || null,
+        ingredients: i.ingredients || null,
+      })),
+    });
+
+    return { success: true, count: result.count };
+  } catch (error) {
+    console.error('Error bulk creating menu items:', error);
+    return { success: false, error: 'خطا در وارد کردن گروهی آیتم‌ها' };
+  }
+}
+
 export async function deleteMenuItem(id: string) {
   try {
     await prisma.menuItem.delete({

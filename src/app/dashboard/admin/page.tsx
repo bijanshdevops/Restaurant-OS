@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from 'react';
-import { getMenuItems, createMenuItem, updateMenuItem, deleteMenuItem } from '@/app/actions/menu';
+import * as XLSX from 'xlsx';
+import { getMenuItems, createMenuItem, updateMenuItem, deleteMenuItem, createMenuItemsBulk } from '@/app/actions/menu';
 import { getUsers, createUser, deleteUser } from '@/app/actions/user';
 import { getPrinters, createPrinter, updatePrinter, deletePrinter } from '@/app/actions/printer';
 import { getMenuCostAnalysis, getMenuItemRecipe, saveMenuItemRecipe, updateInventoryItemCost } from '@/app/actions/costing';
@@ -53,6 +54,16 @@ interface InventoryItemOption {
   name: string;
   unit: string;
   costPerUnit: number;
+}
+
+interface BulkRow {
+  title: string;
+  price: number;
+  category: string;
+  subCategory: string;
+  imageUrl: string;
+  ingredients: string;
+  error: string;
 }
 
 interface RecipeLine {
@@ -111,6 +122,12 @@ export default function AdminPage() {
   const [recipeLines, setRecipeLines] = useState<RecipeLine[]>([]);
   const [isSavingRecipe, setIsSavingRecipe] = useState(false);
   const [isLoadingRecipe, setIsLoadingRecipe] = useState(false);
+
+  // --- Bulk Import State ---
+  const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
+  const [bulkRows, setBulkRows] = useState<BulkRow[]>([]);
+  const [bulkFileName, setBulkFileName] = useState('');
+  const [isImportingBulk, setIsImportingBulk] = useState(false);
 
   // Load menu items on mount
   useEffect(() => {
@@ -214,6 +231,98 @@ export default function AdminPage() {
     setEditingItem(null);
     setMenuFormData({ title: '', price: 0, category: 'غذا', subCategory: '', imageUrl: '', isAvailable: true, ingredients: '' });
     setIsMenuModalOpen(true);
+  };
+
+  // --- Bulk Import Handlers ---
+  const openBulkModal = () => {
+    setBulkRows([]);
+    setBulkFileName('');
+    setIsBulkModalOpen(true);
+  };
+
+  const closeBulkModal = () => {
+    setIsBulkModalOpen(false);
+    setBulkRows([]);
+    setBulkFileName('');
+  };
+
+  const handleDownloadTemplate = () => {
+    const wsData = [
+      ['نام غذا', 'قیمت', 'دسته‌بندی', 'زیردسته', 'مواد اولیه', 'آدرس تصویر'],
+      ['چلو کباب کوبیده', 250000, 'غذا', 'کباب', 'برنج، گوشت چرخ‌کرده، پیاز، زعفران', ''],
+      ['نوشابه قوطی', 30000, 'نوشیدنی', 'سرد', '', ''],
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    ws['!cols'] = [{ wch: 24 }, { wch: 10 }, { wch: 14 }, { wch: 14 }, { wch: 36 }, { wch: 20 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'منو');
+    XLSX.writeFile(wb, 'نمونه-ورود-گروهی-منو.xlsx');
+  };
+
+  const handleBulkFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBulkFileName(file.name);
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const data = evt.target?.result;
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+        const parsed: BulkRow[] = rows.map((row) => {
+          const title = String(row['نام غذا'] ?? row['نام'] ?? row['نام محصول'] ?? '').trim();
+          const priceRaw = row['قیمت'] ?? row['قیمت (تومان)'] ?? 0;
+          const price = Number(String(priceRaw).replace(/[^0-9.]/g, '')) || 0;
+          const category = String(row['دسته‌بندی'] ?? row['دسته بندی'] ?? '').trim() || 'غذا';
+          const subCategory = String(row['زیردسته'] ?? '').trim();
+          const ingredients = String(row['مواد اولیه'] ?? row['توضیحات'] ?? '').trim();
+          const imageUrl = String(row['آدرس تصویر'] ?? row['تصویر'] ?? '').trim();
+
+          let error = '';
+          if (!title) error = 'نام غذا الزامی است';
+          else if (!price || price <= 0) error = 'قیمت نامعتبر است';
+
+          return { title, price, category, subCategory, imageUrl, ingredients, error };
+        });
+
+        setBulkRows(parsed);
+      } catch (err) {
+        console.error(err);
+        alert('خطا در خواندن فایل. لطفاً از فرمت صحیح اکسل (xlsx) استفاده کنید.');
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const handleConfirmBulkImport = async () => {
+    const validRows = bulkRows.filter((r) => !r.error);
+    if (validRows.length === 0) {
+      alert('هیچ ردیف معتبری برای وارد کردن وجود ندارد.');
+      return;
+    }
+
+    setIsImportingBulk(true);
+    const res = await createMenuItemsBulk(validRows.map((r) => ({
+      title: r.title,
+      price: r.price,
+      category: r.category,
+      subCategory: r.subCategory,
+      imageUrl: r.imageUrl,
+      ingredients: r.ingredients,
+    })));
+    setIsImportingBulk(false);
+
+    if (res.success) {
+      alert(`${toPersianDigits(res.count ?? 0)} آیتم با موفقیت به منو اضافه شد.`);
+      closeBulkModal();
+      fetchItems();
+    } else {
+      alert(res.error || 'خطا در وارد کردن گروهی آیتم‌ها');
+    }
   };
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -531,12 +640,20 @@ export default function AdminPage() {
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-300">
           <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-100">
             <h2 className="text-lg font-bold text-gray-800">لیست محصولات</h2>
-            <button 
-              onClick={handleAddNewItem}
-              className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition-all shadow-sm hover:shadow flex items-center gap-2 text-sm"
-            >
-              <span>➕</span> افزودن آیتم جدید
-            </button>
+            <div className="flex items-center gap-2">
+              <button 
+                onClick={openBulkModal}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-4 rounded-lg transition-all shadow-sm hover:shadow flex items-center gap-2 text-sm"
+              >
+                <span>📥</span> ورود گروهی از اکسل
+              </button>
+              <button 
+                onClick={handleAddNewItem}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition-all shadow-sm hover:shadow flex items-center gap-2 text-sm"
+              >
+                <span>➕</span> افزودن آیتم جدید
+              </button>
+            </div>
           </div>
 
           <div className="bg-white shadow-sm border border-gray-200 rounded-2xl overflow-hidden min-h-[300px]">
@@ -1046,6 +1163,100 @@ export default function AdminPage() {
                 className="px-5 py-2 rounded-lg text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-60 transition-colors"
               >
                 {isSavingRecipe ? 'درحال ذخیره...' : 'ذخیره فرمول'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* -------------------- BULK IMPORT MODAL (For Menu Tab) -------------------- */}
+      {isBulkModalOpen && activeTab === 'menu' && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200">
+            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+              <h2 className="text-lg font-bold text-gray-800">ورود گروهی آیتم‌های منو از اکسل</h2>
+              <button onClick={closeBulkModal} className="text-gray-400 hover:text-gray-700 transition-colors text-2xl leading-none">&times;</button>
+            </div>
+
+            <div className="p-6 overflow-y-auto space-y-4 flex-1">
+              <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 text-sm text-blue-800 space-y-2">
+                <p>یک فایل اکسل (xlsx) با ستون‌های «نام غذا»، «قیمت»، «دسته‌بندی»، «زیردسته» و «مواد اولیه» آپلود کنید تا همه ردیف‌ها یکجا به منو اضافه شوند. برای شروع سریع‌تر، نمونه فایل را دانلود و تکمیل کنید.</p>
+                <button
+                  onClick={handleDownloadTemplate}
+                  className="text-blue-700 font-bold underline hover:text-blue-900"
+                >
+                  ⬇️ دانلود نمونه فایل
+                </button>
+              </div>
+
+              <div>
+                <label className="flex items-center justify-center gap-2 border-2 border-dashed border-gray-300 rounded-xl p-6 cursor-pointer hover:border-blue-400 hover:bg-blue-50/30 transition-colors">
+                  <span className="text-2xl">📄</span>
+                  <span className="text-sm font-bold text-gray-600">
+                    {bulkFileName ? `فایل انتخاب‌شده: ${bulkFileName}` : 'برای انتخاب فایل اکسل کلیک کنید'}
+                  </span>
+                  <input type="file" accept=".xlsx,.xls,.csv" onChange={handleBulkFileChange} className="hidden" />
+                </label>
+              </div>
+
+              {bulkRows.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="font-bold text-gray-700">
+                      پیش‌نمایش {toPersianDigits(bulkRows.length)} ردیف
+                    </span>
+                    <span className={`font-bold ${bulkRows.some(r => r.error) ? 'text-amber-600' : 'text-emerald-600'}`}>
+                      {toPersianDigits(bulkRows.filter(r => !r.error).length)} ردیف معتبر
+                      {bulkRows.some(r => r.error) && ` / ${toPersianDigits(bulkRows.filter(r => r.error).length)} دارای خطا`}
+                    </span>
+                  </div>
+                  <div className="border border-gray-200 rounded-xl overflow-hidden max-h-64 overflow-y-auto">
+                    <table className="min-w-full divide-y divide-gray-100 text-right text-xs">
+                      <thead className="bg-gray-50 sticky top-0">
+                        <tr>
+                          <th className="px-3 py-2 font-bold text-gray-600">نام غذا</th>
+                          <th className="px-3 py-2 font-bold text-gray-600">قیمت</th>
+                          <th className="px-3 py-2 font-bold text-gray-600">دسته‌بندی</th>
+                          <th className="px-3 py-2 font-bold text-gray-600">زیردسته</th>
+                          <th className="px-3 py-2 font-bold text-gray-600">وضعیت</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-50">
+                        {bulkRows.map((row, idx) => (
+                          <tr key={idx} className={row.error ? 'bg-red-50' : ''}>
+                            <td className="px-3 py-2">{row.title || '—'}</td>
+                            <td className="px-3 py-2">{formatCurrency(row.price)}</td>
+                            <td className="px-3 py-2">{row.category}</td>
+                            <td className="px-3 py-2">{row.subCategory || '—'}</td>
+                            <td className="px-3 py-2">
+                              {row.error ? (
+                                <span className="text-red-600 font-bold">{row.error}</span>
+                              ) : (
+                                <span className="text-emerald-600 font-bold">✓ معتبر</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-2">
+              <button
+                onClick={closeBulkModal}
+                className="px-5 py-2 rounded-lg text-sm font-bold text-gray-600 hover:bg-gray-100 transition-colors"
+              >
+                انصراف
+              </button>
+              <button
+                onClick={handleConfirmBulkImport}
+                disabled={isImportingBulk || bulkRows.filter(r => !r.error).length === 0}
+                className="px-5 py-2 rounded-lg text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+              >
+                {isImportingBulk ? 'درحال وارد کردن...' : `تایید و وارد کردن (${toPersianDigits(bulkRows.filter(r => !r.error).length)})`}
               </button>
             </div>
           </div>

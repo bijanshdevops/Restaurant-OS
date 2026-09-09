@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { getMenuItems, createMenuItem, updateMenuItem, deleteMenuItem } from '@/app/actions/menu';
 import { getUsers, createUser, deleteUser } from '@/app/actions/user';
 import { getPrinters, createPrinter, updatePrinter, deletePrinter } from '@/app/actions/printer';
+import { getMenuCostAnalysis, getMenuItemRecipe, saveMenuItemRecipe, updateInventoryItemCost } from '@/app/actions/costing';
 import { Role, PrinterType, PrinterConnectionType } from '@prisma/client';
 
 interface MenuItem {
@@ -36,8 +37,31 @@ interface PrinterData {
   isActive: boolean;
 }
 
+interface CostAnalysisItem {
+  id: string;
+  title: string;
+  category: string;
+  price: number;
+  cost: number;
+  profit: number;
+  marginPercent: number;
+  ingredientCount: number;
+}
+
+interface InventoryItemOption {
+  id: string;
+  name: string;
+  unit: string;
+  costPerUnit: number;
+}
+
+interface RecipeLine {
+  inventoryItemId: string;
+  quantity: number;
+}
+
 export default function AdminPage() {
-  const [activeTab, setActiveTab] = useState<'menu' | 'settings' | 'users' | 'printers'>('menu');
+  const [activeTab, setActiveTab] = useState<'menu' | 'settings' | 'users' | 'printers' | 'costing'>('menu');
   
   // --- Menu Management State ---
   const [items, setItems] = useState<MenuItem[]>([]);
@@ -77,6 +101,16 @@ export default function AdminPage() {
     footerMessage: 'از خرید شما متشکریم! به امید دیدار مجدد.'
   });
   const [showSaveAlert, setShowSaveAlert] = useState(false);
+
+  // --- Cost Analysis State ---
+  const [costAnalysis, setCostAnalysis] = useState<CostAnalysisItem[]>([]);
+  const [isLoadingCosting, setIsLoadingCosting] = useState(false);
+  const [isRecipeModalOpen, setIsRecipeModalOpen] = useState(false);
+  const [recipeMenuItem, setRecipeMenuItem] = useState<CostAnalysisItem | null>(null);
+  const [recipeInventoryItems, setRecipeInventoryItems] = useState<InventoryItemOption[]>([]);
+  const [recipeLines, setRecipeLines] = useState<RecipeLine[]>([]);
+  const [isSavingRecipe, setIsSavingRecipe] = useState(false);
+  const [isLoadingRecipe, setIsLoadingRecipe] = useState(false);
 
   // Load menu items on mount
   useEffect(() => {
@@ -131,6 +165,21 @@ export default function AdminPage() {
       fetchPrinters();
     }
   }, [activeTab, fetchPrinters, printers.length]);
+
+  const fetchCostAnalysis = useCallback(async () => {
+    setIsLoadingCosting(true);
+    const res = await getMenuCostAnalysis();
+    if (res.success && res.items) {
+      setCostAnalysis(res.items as CostAnalysisItem[]);
+    }
+    setIsLoadingCosting(false);
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'costing' && costAnalysis.length === 0) {
+      fetchCostAnalysis();
+    }
+  }, [activeTab, fetchCostAnalysis, costAnalysis.length]);
 
   // --- Formatters ---
   const toPersianDigits = (num: number | string) => {
@@ -353,6 +402,67 @@ export default function AdminPage() {
     setTimeout(() => setShowSaveAlert(false), 3000);
   };
 
+  // --- Cost Analysis / Recipe Handlers ---
+  const openRecipeModal = async (item: CostAnalysisItem) => {
+    setRecipeMenuItem(item);
+    setIsRecipeModalOpen(true);
+    setIsLoadingRecipe(true);
+    const res = await getMenuItemRecipe(item.id);
+    if (res.success) {
+      setRecipeInventoryItems((res.inventoryItems || []) as InventoryItemOption[]);
+      setRecipeLines(
+        (res.recipeItems || []).map((ri: any) => ({
+          inventoryItemId: ri.inventoryItemId,
+          quantity: ri.quantity,
+        }))
+      );
+    }
+    setIsLoadingRecipe(false);
+  };
+
+  const closeRecipeModal = () => {
+    setIsRecipeModalOpen(false);
+    setRecipeMenuItem(null);
+    setRecipeLines([]);
+  };
+
+  const addRecipeLine = () => {
+    setRecipeLines([...recipeLines, { inventoryItemId: '', quantity: 0 }]);
+  };
+
+  const removeRecipeLine = (index: number) => {
+    setRecipeLines(recipeLines.filter((_, i) => i !== index));
+  };
+
+  const updateRecipeLine = (index: number, field: 'inventoryItemId' | 'quantity', value: string | number) => {
+    setRecipeLines(recipeLines.map((line, i) => i === index ? { ...line, [field]: value } as RecipeLine : line));
+  };
+
+  const updateIngredientCostLocal = async (inventoryItemId: string, cost: number) => {
+    setRecipeInventoryItems(recipeInventoryItems.map(inv => inv.id === inventoryItemId ? { ...inv, costPerUnit: cost } : inv));
+    await updateInventoryItemCost(inventoryItemId, cost);
+  };
+
+  const computeRecipeCost = () => {
+    return recipeLines.reduce((sum, line) => {
+      const inv = recipeInventoryItems.find(i => i.id === line.inventoryItemId);
+      return sum + (inv ? inv.costPerUnit * line.quantity : 0);
+    }, 0);
+  };
+
+  const handleSaveRecipe = async () => {
+    if (!recipeMenuItem) return;
+    setIsSavingRecipe(true);
+    const res = await saveMenuItemRecipe(recipeMenuItem.id, recipeLines);
+    setIsSavingRecipe(false);
+    if (res.success) {
+      closeRecipeModal();
+      fetchCostAnalysis();
+    } else {
+      alert(res.error || 'خطا در ذخیره فرمول غذا');
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Top Header & Tab Navigation */}
@@ -391,6 +501,16 @@ export default function AdminPage() {
               }`}
             >
               🖨️ تنظیمات چاپگرها
+            </button>
+            <button
+              onClick={() => setActiveTab('costing')}
+              className={`px-6 py-3 font-bold text-sm transition-colors border-b-2 -mb-px ${
+                activeTab === 'costing' 
+                  ? 'border-blue-600 text-blue-600' 
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              💰 قیمت تمام‌شده
             </button>
             <button
               onClick={() => setActiveTab('settings')}
@@ -638,6 +758,96 @@ export default function AdminPage() {
         </div>
       )}
 
+      {/* -------------------- COST ANALYSIS TAB -------------------- */}
+      {activeTab === 'costing' && (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-300">
+          <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+            <div>
+              <h2 className="text-lg font-bold text-gray-800">آنالیز قیمت تمام‌شده غذاها</h2>
+              <p className="text-xs text-gray-500 mt-1">محاسبه هزینه مواد اولیه، سود و حاشیه سود هر غذا بر اساس فرمول تعریف‌شده</p>
+            </div>
+          </div>
+
+          <div className="bg-white shadow-sm border border-gray-200 rounded-2xl overflow-hidden min-h-[300px]">
+            {isLoadingCosting ? (
+              <div className="flex justify-center items-center h-[300px]">
+                <span className="text-gray-500 font-bold animate-pulse">درحال محاسبه...</span>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-100 text-right">
+                  <thead className="bg-gray-50/80">
+                    <tr>
+                      <th scope="col" className="px-6 py-4 text-xs font-bold text-gray-600">نام غذا</th>
+                      <th scope="col" className="px-6 py-4 text-xs font-bold text-gray-600">دسته‌بندی</th>
+                      <th scope="col" className="px-6 py-4 text-xs font-bold text-gray-600 text-left">قیمت فروش</th>
+                      <th scope="col" className="px-6 py-4 text-xs font-bold text-gray-600 text-left">هزینه مواد</th>
+                      <th scope="col" className="px-6 py-4 text-xs font-bold text-gray-600 text-left">سود ناخالص</th>
+                      <th scope="col" className="px-6 py-4 text-xs font-bold text-gray-600 text-center">حاشیه سود</th>
+                      <th scope="col" className="px-6 py-4 text-xs font-bold text-gray-600 text-center">عملیات</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-50">
+                    {costAnalysis.map((item) => (
+                      <tr key={item.id} className="hover:bg-gray-50/50 transition-colors group">
+                        <td className="px-6 py-4">
+                          <div className="text-sm font-bold text-gray-900">{item.title}</div>
+                          {item.ingredientCount === 0 && (
+                            <div className="text-[11px] text-amber-600 mt-0.5">فرمول تعریف نشده</div>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`px-2 py-1 text-[11px] font-bold rounded-md border ${item.category === 'ایرانی' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-indigo-50 text-indigo-700 border-indigo-200'}`}>
+                            {item.category}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-left">
+                          <span className="text-sm font-bold text-gray-900">{formatCurrency(item.price)}</span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-left">
+                          <span className="text-sm font-bold text-gray-600">{formatCurrency(Math.round(item.cost))}</span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-left">
+                          <span className={`text-sm font-bold ${item.profit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                            {formatCurrency(Math.round(item.profit))}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-center">
+                          <span className={`px-2 py-1 text-[11px] font-bold rounded-md border ${
+                            item.ingredientCount === 0
+                              ? 'bg-gray-50 text-gray-500 border-gray-200'
+                              : item.marginPercent >= 50
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                : item.marginPercent >= 20
+                                  ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                  : 'bg-red-50 text-red-700 border-red-200'
+                          }`}>
+                            {item.ingredientCount === 0 ? '—' : `${toPersianDigits(Math.round(item.marginPercent))}٪`}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-center">
+                          <button
+                            onClick={() => openRecipeModal(item)}
+                            className="text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-md transition-colors font-semibold text-xs border border-blue-100"
+                          >
+                            تعریف فرمول
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {costAnalysis.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="px-6 py-8 text-center text-gray-500 text-sm">هیچ غذایی ثبت نشده است.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* -------------------- GENERAL SETTINGS TAB -------------------- */}
       {activeTab === 'settings' && (
         <div className="animate-in fade-in slide-in-from-bottom-4 duration-300">
@@ -737,6 +947,105 @@ export default function AdminPage() {
                 className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-xl transition-all shadow-md hover:shadow-lg flex items-center gap-2"
               >
                 <span>💾</span> ذخیره تغییرات
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* -------------------- RECIPE MODAL (For Cost Analysis Tab) -------------------- */}
+      {isRecipeModalOpen && activeTab === 'costing' && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200">
+            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+              <div>
+                <h3 className="font-bold text-gray-900">فرمول غذا: {recipeMenuItem?.title}</h3>
+                <p className="text-xs text-gray-500 mt-0.5">اقلام انبار و مقدار مصرفی برای هر پرس را مشخص کنید</p>
+              </div>
+              <button onClick={closeRecipeModal} className="text-gray-400 hover:text-gray-700 text-xl leading-none">✕</button>
+            </div>
+
+            <div className="p-6 overflow-y-auto flex-1 space-y-4">
+              {isLoadingRecipe ? (
+                <div className="text-center text-gray-500 text-sm py-8 animate-pulse">درحال بارگذاری...</div>
+              ) : (
+                <>
+                  <div className="space-y-3">
+                    {recipeLines.map((line, index) => {
+                      const inv = recipeInventoryItems.find(i => i.id === line.inventoryItemId);
+                      return (
+                        <div key={index} className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl p-3">
+                          <select
+                            value={line.inventoryItemId}
+                            onChange={e => updateRecipeLine(index, 'inventoryItemId', e.target.value)}
+                            className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white outline-none focus:border-blue-500"
+                          >
+                            <option value="">— انتخاب کالای انبار —</option>
+                            {recipeInventoryItems.map(inv => (
+                              <option key={inv.id} value={inv.id}>{inv.name} ({inv.unit})</option>
+                            ))}
+                          </select>
+                          <input
+                            type="number"
+                            step="any"
+                            placeholder="مقدار"
+                            value={line.quantity || ''}
+                            onChange={e => updateRecipeLine(index, 'quantity', parseFloat(e.target.value) || 0)}
+                            className="w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm text-left outline-none focus:border-blue-500"
+                            dir="ltr"
+                          />
+                          {inv && (
+                            <div className="w-40 flex items-center gap-1 text-xs text-gray-500">
+                              <span>قیمت واحد:</span>
+                              <input
+                                type="number"
+                                step="any"
+                                value={inv.costPerUnit || ''}
+                                onChange={e => updateIngredientCostLocal(inv.id, parseFloat(e.target.value) || 0)}
+                                className="w-20 border border-gray-300 rounded-lg px-2 py-1.5 text-xs text-left outline-none focus:border-blue-500"
+                                dir="ltr"
+                              />
+                            </div>
+                          )}
+                          <button
+                            onClick={() => removeRecipeLine(index)}
+                            className="text-red-500 hover:text-red-700 px-2 text-sm"
+                          >
+                            حذف
+                          </button>
+                        </div>
+                      );
+                    })}
+                    {recipeLines.length === 0 && (
+                      <p className="text-center text-gray-400 text-sm py-4">هنوز موردی اضافه نشده است.</p>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={addRecipeLine}
+                    className="w-full border-2 border-dashed border-gray-300 hover:border-blue-400 hover:text-blue-600 text-gray-500 rounded-xl py-2.5 text-sm font-semibold transition-colors"
+                  >
+                    ➕ افزودن ماده اولیه
+                  </button>
+
+                  <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 flex justify-between items-center">
+                    <span className="text-sm font-bold text-blue-900">هزینه تمام‌شده محاسبه‌شده:</span>
+                    <span className="text-lg font-black text-blue-900">{formatCurrency(Math.round(computeRecipeCost()))} تومان</span>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
+              <button onClick={closeRecipeModal} className="px-4 py-2 rounded-lg text-sm font-bold text-gray-600 hover:bg-gray-200 transition-colors">
+                انصراف
+              </button>
+              <button
+                onClick={handleSaveRecipe}
+                disabled={isSavingRecipe}
+                className="px-5 py-2 rounded-lg text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-60 transition-colors"
+              >
+                {isSavingRecipe ? 'درحال ذخیره...' : 'ذخیره فرمول'}
               </button>
             </div>
           </div>

@@ -36,6 +36,7 @@ model MenuItem {
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @default(now()) @updatedAt
   orderItems  OrderItem[]
+  recipeItems RecipeItem[]
 }
 
 model Order {
@@ -72,7 +73,21 @@ model InventoryItem {
   unit          String
   currentStock  Float    @default(0)
   minStockLevel Float    @default(0)
+  costPerUnit   Float    @default(0)
   lastRestocked DateTime @default(now())
+  recipeItems   RecipeItem[]
+}
+
+model RecipeItem {
+  id              String        @id @default(uuid())
+  menuItemId      String
+  inventoryItemId String
+  quantity        Float
+
+  menuItem        MenuItem      @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+
+  @@unique([menuItemId, inventoryItemId])
 }
 
 model Customer {

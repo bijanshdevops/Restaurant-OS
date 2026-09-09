@@ -2,6 +2,7 @@
 
 import { prisma } from '@/lib/prisma';
 import { Role } from '@prisma/client';
+import { PasswordHasher } from '@/shared/infrastructure/security/PasswordHasher';
 
 export async function getUsers() {
   try {
@@ -13,7 +14,7 @@ export async function getUsers() {
         data: {
           name: 'مدیر سیستم',
           username: 'admin',
-          password: '123', // In a real app, this should be hashed
+          password: await PasswordHasher.hash('123'),
           roles: ['ADMIN'],
         }
       });
@@ -56,7 +57,7 @@ export async function createUser(data: {
       data: {
         name: data.name,
         username: data.username,
-        password: data.password, // In a real app, hash this!
+        password: await PasswordHasher.hash(data.password),
         roles: data.roles,
       }
     });
@@ -99,7 +100,7 @@ export async function loginUser(username: string, password: string) {
         data: {
           name: 'مدیر سیستم',
           username: 'admin',
-          password: '123',
+          password: await PasswordHasher.hash('123'),
           roles: ['ADMIN'],
         }
       });
@@ -109,7 +110,7 @@ export async function loginUser(username: string, password: string) {
       where: { username }
     });
 
-    if (!user || user.password !== password) {
+    if (!user || !(await PasswordHasher.compare(password, user.password))) {
       return { success: false, error: 'نام کاربری یا رمز عبور اشتباه است' };
     }
 

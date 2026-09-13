@@ -2,8 +2,12 @@
 
 import { prisma } from '@/lib/prisma';
 import { TransactionType } from '@prisma/client';
+import { requireRole } from '@/lib/auth';
 
 export async function getTransactions() {
+  const auth = await requireRole('ADMIN', 'ACCOUNTANT');
+  if (!auth.ok) return { success: false, error: auth.error };
+
   try {
     const transactions = await prisma.transaction.findMany({
       orderBy: { createdAt: 'desc' }
@@ -17,6 +21,9 @@ export async function getTransactions() {
 }
 
 export async function createExpense(description: string, amount: number) {
+  const auth = await requireRole('ADMIN', 'ACCOUNTANT');
+  if (!auth.ok) return { success: false, error: auth.error };
+
   try {
     const expense = await prisma.transaction.create({
       data: {

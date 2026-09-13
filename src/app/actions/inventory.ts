@@ -1,8 +1,12 @@
 "use server";
 
 import { prisma } from '@/lib/prisma';
+import { requireRole } from '@/lib/auth';
 
 export async function getInventoryItems() {
+  const auth = await requireRole('ADMIN', 'INVENTORY_MANAGER');
+  if (!auth.ok) return { success: false, error: auth.error };
+
   try {
     const items = await prisma.inventoryItem.findMany({
       orderBy: { name: 'asc' }
@@ -21,6 +25,9 @@ export async function createInventoryItem(data: {
   currentStock: number;
   minStockLevel: number;
 }) {
+  const auth = await requireRole('ADMIN', 'INVENTORY_MANAGER');
+  if (!auth.ok) return { success: false, error: auth.error };
+
   try {
     const newItem = await prisma.inventoryItem.create({
       data: {
@@ -39,20 +46,21 @@ export async function createInventoryItem(data: {
 }
 
 export async function restockInventoryItem(id: string, addedAmount: number) {
-  try {
-    const existing = await prisma.inventoryItem.findUnique({ where: { id } });
-    if (!existing) {
-      return { success: false, error: 'Item not found' };
-    }
+  const auth = await requireRole('ADMIN', 'INVENTORY_MANAGER');
+  if (!auth.ok) return { success: false, error: auth.error };
 
+  try {
+    // Use Prisma's atomic `increment` instead of read-then-write: two concurrent
+    // restocks of the same item would otherwise race and one update could be
+    // silently lost.
     const updatedItem = await prisma.inventoryItem.update({
       where: { id },
       data: {
-        currentStock: existing.currentStock + addedAmount,
+        currentStock: { increment: addedAmount },
         lastRestocked: new Date(),
       },
     });
-    
+
     return { success: true, item: updatedItem };
   } catch (error) {
     console.error('Error restocking inventory item:', error);
@@ -61,6 +69,9 @@ export async function restockInventoryItem(id: string, addedAmount: number) {
 }
 
 export async function deleteInventoryItem(id: string) {
+  const auth = await requireRole('ADMIN', 'INVENTORY_MANAGER');
+  if (!auth.ok) return { success: false, error: auth.error };
+
   try {
     await prisma.inventoryItem.delete({
       where: { id },

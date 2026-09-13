@@ -2,8 +2,12 @@
 
 import { prisma } from '@/lib/prisma';
 import { LoyaltyTier } from '@prisma/client';
+import { requireRole } from '@/lib/auth';
 
 export async function getCustomers() {
+  const auth = await requireRole('ADMIN', 'CASHIER');
+  if (!auth.ok) return { success: false, error: auth.error };
+
   try {
     const customers = await prisma.customer.findMany({
       orderBy: [
@@ -22,6 +26,9 @@ export async function createCustomer(data: {
   fullName: string;
   phone: string;
 }) {
+  const auth = await requireRole('ADMIN', 'CASHIER');
+  if (!auth.ok) return { success: false, error: auth.error };
+
   try {
     const newCustomer = await prisma.customer.create({
       data: {

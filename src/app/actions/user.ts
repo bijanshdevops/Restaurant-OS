@@ -3,8 +3,12 @@
 import { prisma } from '@/lib/prisma';
 import { Role } from '@prisma/client';
 import { PasswordHasher } from '@/shared/infrastructure/security/PasswordHasher';
+import { createSession, destroySession, requireRole } from '@/lib/auth';
 
 export async function getUsers() {
+  const auth = await requireRole('ADMIN');
+  if (!auth.ok) return { success: false, error: auth.error };
+
   try {
     const usersCount = await prisma.user.count();
     
@@ -45,6 +49,9 @@ export async function createUser(data: {
   password: string;
   roles: Role[];
 }) {
+  const auth = await requireRole('ADMIN');
+  if (!auth.ok) return { success: false, error: auth.error };
+
   try {
     const existing = await prisma.user.findUnique({
       where: { username: data.username }
@@ -72,6 +79,9 @@ export async function createUser(data: {
 }
 
 export async function deleteUser(id: string) {
+  const auth = await requireRole('ADMIN');
+  if (!auth.ok) return { success: false, error: auth.error };
+
   try {
     // Prevent deleting the very last admin
     const adminCount = await prisma.user.count({
@@ -115,9 +125,30 @@ export async function loginUser(username: string, password: string) {
     }
 
     const { password: _, ...safeUser } = user;
+
+    // Establish a signed, httpOnly session cookie so subsequent Server Actions
+    // can verify who is calling them (previously there was no server-side
+    // session at all, so any client could call admin-only actions directly).
+    await createSession({
+      id: safeUser.id,
+      username: safeUser.username,
+      name: safeUser.name,
+      roles: safeUser.roles,
+    });
+
     return { success: true, user: safeUser };
   } catch (error) {
     console.error('Error logging in:', error);
     return { success: false, error: 'System error during login' };
+  }
+}
+
+export async function logoutUser() {
+  try {
+    await destroySession();
+    return { success: true };
+  } catch (error) {
+    console.error('Error logging out:', error);
+    return { success: false, error: 'Failed to log out' };
   }
 }

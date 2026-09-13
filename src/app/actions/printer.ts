@@ -2,8 +2,12 @@
 
 import { prisma } from "@/lib/prisma";
 import { PrinterType, PrinterConnectionType } from "@prisma/client";
+import { requireRole } from "@/lib/auth";
 
 export async function getPrinters() {
+  const auth = await requireRole();
+  if (!auth.ok) return { success: false, error: auth.error };
+
   try {
     const printers = await prisma.printer.findMany({
       orderBy: { createdAt: 'desc' }
@@ -16,6 +20,9 @@ export async function getPrinters() {
 }
 
 export async function createPrinter(data: { name: string; type: PrinterType; connectionType: PrinterConnectionType; ipAddress?: string; port?: number; path?: string; isActive?: boolean }) {
+  const auth = await requireRole('ADMIN');
+  if (!auth.ok) return { success: false, error: auth.error };
+
   try {
     const printer = await prisma.printer.create({
       data: {
@@ -36,6 +43,9 @@ export async function createPrinter(data: { name: string; type: PrinterType; con
 }
 
 export async function updatePrinter(id: string, data: Partial<{ name: string; type: PrinterType; connectionType: PrinterConnectionType; ipAddress: string; port: number; path: string; isActive: boolean }>) {
+  const auth = await requireRole('ADMIN');
+  if (!auth.ok) return { success: false, error: auth.error };
+
   try {
     const printer = await prisma.printer.update({
       where: { id },
@@ -49,6 +59,9 @@ export async function updatePrinter(id: string, data: Partial<{ name: string; ty
 }
 
 export async function deletePrinter(id: string) {
+  const auth = await requireRole('ADMIN');
+  if (!auth.ok) return { success: false, error: auth.error };
+
   try {
     await prisma.printer.delete({
       where: { id }
@@ -61,6 +74,9 @@ export async function deletePrinter(id: string) {
 }
 
 export async function printReceipt(orderId: string, printerId: string) {
+  const auth = await requireRole('ADMIN', 'CASHIER');
+  if (!auth.ok) return { success: false, error: auth.error };
+
   try {
     const order = await prisma.order.findUnique({
       where: { id: orderId },
@@ -108,8 +124,14 @@ export async function printReceipt(orderId: string, printerId: string) {
       // \uFEFF is the UTF-8 BOM
       await writeFile(tmpFilePath, "\uFEFF" + receiptText, 'utf8');
       
+      // Escape single quotes for safe interpolation into a PowerShell single-quoted
+      // string (doubling the quote is PowerShell's own escape mechanism). This
+      // prevents a maliciously-crafted printer path/name from breaking out of the
+      // string and injecting arbitrary PowerShell commands.
+      const escapePs = (value: string) => value.replace(/'/g, "''");
+
       try {
-        await execAsync(`powershell -command "Get-Content -Path '${tmpFilePath}' | Out-Printer -Name '${printer.path}'"`);
+        await execAsync(`powershell -NoProfile -NonInteractive -command "Get-Content -Path '${escapePs(tmpFilePath)}' | Out-Printer -Name '${escapePs(printer.path)}'"`);
       } finally {
         // Clean up the temp file
         await unlink(tmpFilePath).catch(() => {});

@@ -6,6 +6,7 @@ import { getMenuItems, createMenuItem, updateMenuItem, deleteMenuItem, createMen
 import { getUsers, createUser, deleteUser } from '@/app/actions/user';
 import { getPrinters, createPrinter, updatePrinter, deletePrinter } from '@/app/actions/printer';
 import { getMenuCostAnalysis, getMenuItemRecipe, saveMenuItemRecipe, updateInventoryItemCost } from '@/app/actions/costing';
+import { getSettings, updateSettings } from '@/app/actions/settings';
 import { Role, PrinterType, PrinterConnectionType } from '@prisma/client';
 
 interface MenuItem {
@@ -112,6 +113,9 @@ export default function AdminPage() {
     footerMessage: 'از خرید شما متشکریم! به امید دیدار مجدد.'
   });
   const [showSaveAlert, setShowSaveAlert] = useState(false);
+  const [isLoadingSettings, setIsLoadingSettings] = useState(true);
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
 
   // --- Cost Analysis State ---
   const [costAnalysis, setCostAnalysis] = useState<CostAnalysisItem[]>([]);
@@ -132,6 +136,27 @@ export default function AdminPage() {
   // Load menu items on mount
   useEffect(() => {
     fetchItems();
+  }, []);
+
+  // Load general settings on mount (this used to be pure client-side state
+  // with no persistence at all: the "save" button just showed a success
+  // message without ever writing anything to the server).
+  useEffect(() => {
+    const loadSettings = async () => {
+      setIsLoadingSettings(true);
+      const res = await getSettings();
+      if (res.success && res.settings) {
+        setSettings({
+          taxPercentage: res.settings.taxPercentage,
+          packagingCost: res.settings.packagingCost,
+          restaurantName: res.settings.restaurantName,
+          contactNumber: res.settings.contactNumber,
+          footerMessage: res.settings.footerMessage,
+        });
+      }
+      setIsLoadingSettings(false);
+    };
+    loadSettings();
   }, []);
 
   const fetchItems = async () => {
@@ -506,9 +531,18 @@ export default function AdminPage() {
   };
 
   // --- Settings Handlers ---
-  const handleSaveSettings = () => {
-    setShowSaveAlert(true);
-    setTimeout(() => setShowSaveAlert(false), 3000);
+  const handleSaveSettings = async () => {
+    setIsSavingSettings(true);
+    setSettingsError(null);
+    const res = await updateSettings(settings);
+    setIsSavingSettings(false);
+
+    if (res.success) {
+      setShowSaveAlert(true);
+      setTimeout(() => setShowSaveAlert(false), 3000);
+    } else {
+      setSettingsError(res.error || 'خطا در ذخیره تنظیمات');
+    }
   };
 
   // --- Cost Analysis / Recipe Handlers ---
@@ -978,6 +1012,16 @@ export default function AdminPage() {
             </div>
           )}
 
+          {settingsError && (
+            <div className="mb-6 bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 flex items-center gap-3 shadow-sm animate-in fade-in slide-in-from-top-2">
+              <span className="text-xl">⚠️</span>
+              <div>
+                <h4 className="font-bold text-sm">ذخیره تنظیمات ناموفق بود</h4>
+                <p className="text-xs text-red-600 mt-0.5">{settingsError}</p>
+              </div>
+            </div>
+          )}
+
           <div className="bg-white shadow-sm border border-gray-200 rounded-2xl overflow-hidden">
             <div className="p-6 md:p-8 space-y-10">
               
@@ -1061,9 +1105,10 @@ export default function AdminPage() {
             <div className="bg-gray-50 border-t border-gray-100 p-6 flex justify-end">
               <button 
                 onClick={handleSaveSettings}
-                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-xl transition-all shadow-md hover:shadow-lg flex items-center gap-2"
+                disabled={isSavingSettings || isLoadingSettings}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-xl transition-all shadow-md hover:shadow-lg flex items-center gap-2 disabled:opacity-60"
               >
-                <span>💾</span> ذخیره تغییرات
+                <span>💾</span> {isSavingSettings ? 'درحال ذخیره...' : 'ذخیره تغییرات'}
               </button>
             </div>
           </div>
@@ -1363,6 +1408,19 @@ export default function AdminPage() {
                   />
                 </div>
                 
+                <div className="col-span-2 flex items-center gap-3 bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 mt-2">
+                  <input
+                    type="checkbox"
+                    id="menu-item-available"
+                    checked={menuFormData.isAvailable ?? true}
+                    onChange={e => setMenuFormData({...menuFormData, isAvailable: e.target.checked})}
+                    className="w-4 h-4 accent-blue-600"
+                  />
+                  <label htmlFor="menu-item-available" className="text-sm font-bold text-gray-700 cursor-pointer select-none">
+                    این محصول در حال حاضر موجود است
+                  </label>
+                </div>
+
                 <div className="col-span-2 mt-2">
                   <label className="block text-sm font-bold text-gray-700 mb-1">مواد تشکیل دهنده (اختیاری)</label>
                   <textarea 

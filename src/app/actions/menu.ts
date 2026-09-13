@@ -1,8 +1,12 @@
 "use server";
 
 import { prisma } from '@/lib/prisma';
+import { requireRole } from '@/lib/auth';
 
 export async function getMenuItems() {
+  const auth = await requireRole();
+  if (!auth.ok) return [];
+
   try {
     const items = await prisma.menuItem.findMany({
       orderBy: { title: 'asc' }
@@ -20,8 +24,12 @@ export async function createMenuItem(data: {
   category: string;
   subCategory: string;
   imageUrl: string;
+  isAvailable?: boolean;
   ingredients?: string;
 }) {
+  const auth = await requireRole('ADMIN');
+  if (!auth.ok) return { success: false, error: auth.error };
+
   try {
     const newItem = await prisma.menuItem.create({
       data: {
@@ -30,6 +38,7 @@ export async function createMenuItem(data: {
         category: data.category,
         subCategory: data.subCategory || null,
         imageUrl: data.imageUrl || null,
+        isAvailable: data.isAvailable ?? true,
         ingredients: data.ingredients || null,
       },
     });
@@ -46,8 +55,12 @@ export async function updateMenuItem(id: string, data: {
   category: string;
   subCategory: string;
   imageUrl: string;
+  isAvailable?: boolean;
   ingredients?: string;
 }) {
+  const auth = await requireRole('ADMIN');
+  if (!auth.ok) return { success: false, error: auth.error };
+
   try {
     const updatedItem = await prisma.menuItem.update({
       where: { id },
@@ -57,6 +70,7 @@ export async function updateMenuItem(id: string, data: {
         category: data.category,
         subCategory: data.subCategory || null,
         imageUrl: data.imageUrl || null,
+        isAvailable: data.isAvailable ?? true,
         ingredients: data.ingredients || null,
       },
     });
@@ -75,6 +89,9 @@ export async function createMenuItemsBulk(items: {
   imageUrl?: string;
   ingredients?: string;
 }[]) {
+  const auth = await requireRole('ADMIN');
+  if (!auth.ok) return { success: false, error: auth.error };
+
   try {
     const validItems = items.filter((i) => i.title && i.price > 0);
 
@@ -101,6 +118,9 @@ export async function createMenuItemsBulk(items: {
 }
 
 export async function deleteMenuItem(id: string) {
+  const auth = await requireRole('ADMIN');
+  if (!auth.ok) return { success: false, error: auth.error };
+
   try {
     await prisma.menuItem.delete({
       where: { id },

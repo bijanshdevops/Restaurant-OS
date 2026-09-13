@@ -14,13 +14,9 @@ export function middleware(request: NextRequest) {
   // 1. JWT Verification Mock (In production: verify cryptographic signature via 'jose' or equivalent)
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.substring(7);
-    
-    // Dev bypass: allow unauthenticated access in development
-    if (token === 'dev-bypass-token') {
-      tenantId = 'demo-tenant';
-    }
+
     // For this architectural simulation, we consider the token valid if it matches our strictly defined mock pattern
-    else if (token.startsWith('valid-tenant-')) {
+    if (token.startsWith('valid-tenant-')) {
       tenantId = token.replace('valid-tenant-', '');
     }
   }

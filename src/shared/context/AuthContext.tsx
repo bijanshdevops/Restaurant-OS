@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Role } from '@prisma/client';
+import { logoutUser } from '@/app/actions/user';
 
 export interface User {
   id: string;
@@ -14,7 +15,7 @@ export interface User {
 interface AuthContextType {
   user: User | null;
   login: (user: User) => void;
-  logout: () => void;
+  logout: () => Promise<void>;
   isLoading: boolean;
 }
 
@@ -41,16 +42,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(newUser);
     localStorage.setItem('restaurant_user', JSON.stringify(newUser));
 
-    if (newUser.role === 'CHEF') {
+    // A chef with no other role should land straight on the kitchen screen.
+    // (This used to check a non-existent singular `newUser.role` field, so the
+    // condition was always false and chefs never got redirected here.)
+    if (newUser.roles?.includes('CHEF') && !newUser.roles.includes('ADMIN')) {
       router.push('/dashboard/kitchen');
     } else {
       router.push('/dashboard');
     }
   };
 
-  const logout = () => {
+  const logout = async () => {
     setUser(null);
     localStorage.removeItem('restaurant_user');
+    await logoutUser();
     router.push('/login');
   };
 

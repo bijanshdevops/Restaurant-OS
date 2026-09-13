@@ -5,6 +5,8 @@ import { formatCurrency, toPersianDigits } from '../../../shared/utils/formatter
 import { getMenuItems } from '@/app/actions/menu';
 import { createOrder } from '@/app/actions/order';
 import { getPrinters, printReceipt } from '@/app/actions/printer';
+import { getSettings } from '@/app/actions/settings';
+import { getCustomers } from '@/app/actions/crm';
 
 interface MenuItem {
   id: string;
@@ -41,10 +43,33 @@ export default function POSPage() {
   const [activeMainCategory, setActiveMainCategory] = useState('همه');
   const [activeSubCategory, setActiveSubCategory] = useState('همه');
 
+  const [taxPercentage, setTaxPercentage] = useState(0);
+  const [packagingCost, setPackagingCost] = useState(0);
+
+  const [customers, setCustomers] = useState<any[]>([]);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
+
   useEffect(() => {
     fetchMenu();
     fetchPrinters();
+    fetchSettings();
+    fetchCustomers();
   }, []);
+
+  const fetchSettings = async () => {
+    const res = await getSettings();
+    if (res.success && res.settings) {
+      setTaxPercentage(res.settings.taxPercentage);
+      setPackagingCost(res.settings.packagingCost);
+    }
+  };
+
+  const fetchCustomers = async () => {
+    const res = await getCustomers();
+    if (res.success && res.customers) {
+      setCustomers(res.customers);
+    }
+  };
 
   const fetchPrinters = async () => {
     const res = await getPrinters();
@@ -80,7 +105,12 @@ export default function POSPage() {
     setCart((prev) => prev.filter((c) => c.menuItemId !== menuItemId));
   };
 
-  const total = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  // These figures are only for on-screen display before checkout. The amount
+  // actually charged/recorded is always recomputed on the server from the
+  // real menu prices, so a tampered client can't place an order at a fake price.
+  const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const taxAmount = Math.round((subtotal * taxPercentage) / 100);
+  const total = cart.length > 0 ? subtotal + taxAmount + packagingCost : 0;
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
@@ -91,14 +121,15 @@ export default function POSPage() {
       const payload = cart.map(c => ({
         menuItemId: c.menuItemId,
         quantity: c.quantity,
-        price: c.price
       }));
 
-      const res = await createOrder(payload, total);
+      const res = await createOrder(payload, selectedCustomerId || undefined);
       
       if (res.success && res.order) {
         setCart([]);
-        setLastOrderMessage(`سفارش ${res.order.orderNumber} با موفقیت ثبت شد! مبلغ کل: ${formatCurrency(total)}`);
+        setSelectedCustomerId('');
+        fetchCustomers();
+        setLastOrderMessage(`سفارش ${res.order.orderNumber} با موفقیت ثبت شد! مبلغ کل: ${formatCurrency(res.order.totalAmount)}`);
         
         // Open printer modal
         setCompletedOrderId(res.order.id);
@@ -272,7 +303,40 @@ export default function POSPage() {
         </div>
 
         <div className="p-4 border-t border-gray-200 bg-gray-50 rounded-b-lg space-y-4">
-          <div className="flex justify-between items-center text-lg font-black text-gray-900">
+          <div>
+            <label className="block text-xs font-bold text-gray-500 mb-1">مشتری (اختیاری)</label>
+            <select
+              value={selectedCustomerId}
+              onChange={(e) => setSelectedCustomerId(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
+            >
+              <option value="">بدون مشتری</option>
+              {customers.map((c) => (
+                <option key={c.id} value={c.id}>{c.fullName} ({c.phone})</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-1.5 text-sm border-t border-gray-200 pt-3">
+            <div className="flex justify-between text-gray-600">
+              <span>جمع اقلام:</span>
+              <span>{formatCurrency(subtotal)}</span>
+            </div>
+            {taxPercentage > 0 && (
+              <div className="flex justify-between text-gray-600">
+                <span>مالیات ({toPersianDigits(taxPercentage)}%):</span>
+                <span>{formatCurrency(taxAmount)}</span>
+              </div>
+            )}
+            {packagingCost > 0 && (
+              <div className="flex justify-between text-gray-600">
+                <span>هزینه بسته‌بندی:</span>
+                <span>{formatCurrency(packagingCost)}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="flex justify-between items-center text-lg font-black text-gray-900 border-t border-gray-200 pt-3">
             <span>مبلغ کل:</span>
             <span>{formatCurrency(total)}</span>
           </div>

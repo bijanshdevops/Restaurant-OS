@@ -1,8 +1,12 @@
 "use server";
 
 import { prisma } from '@/lib/prisma';
+import { requireRole } from '@/lib/auth';
 
 export async function getMenuCostAnalysis() {
+  const auth = await requireRole('ADMIN');
+  if (!auth.ok) return { success: false, error: auth.error };
+
   try {
     const items = await prisma.menuItem.findMany({
       orderBy: { title: 'asc' },
@@ -41,6 +45,9 @@ export async function getMenuCostAnalysis() {
 }
 
 export async function getMenuItemRecipe(menuItemId: string) {
+  const auth = await requireRole('ADMIN');
+  if (!auth.ok) return { success: false, error: auth.error };
+
   try {
     const [menuItem, inventoryItems, recipeItems] = await Promise.all([
       prisma.menuItem.findUnique({ where: { id: menuItemId } }),
@@ -71,6 +78,9 @@ export async function saveMenuItemRecipe(
   menuItemId: string,
   lines: { inventoryItemId: string; quantity: number }[]
 ) {
+  const auth = await requireRole('ADMIN');
+  if (!auth.ok) return { success: false, error: auth.error };
+
   try {
     const validLines = lines.filter(
       (l) => l.inventoryItemId && l.quantity > 0
@@ -99,6 +109,9 @@ export async function saveMenuItemRecipe(
 }
 
 export async function updateInventoryItemCost(id: string, costPerUnit: number) {
+  const auth = await requireRole('ADMIN');
+  if (!auth.ok) return { success: false, error: auth.error };
+
   try {
     const updated = await prisma.inventoryItem.update({
       where: { id },

@@ -59,7 +59,10 @@ export function middleware(request: NextRequest) {
   });
 }
 
-// 5. Edge configuration to guarantee execution on all internal module APIs
+// 5. Edge configuration to guarantee execution on all internal module APIs.
+// Excludes /api/test-helpers: a test-only dispatch route (guarded separately by
+// ENABLE_TEST_ROUTES) that must stay reachable for the automated test suite
+// regardless of this tenant/rate-limit gateway logic.
 export const config = {
-  matcher: '/api/:path*',
+  matcher: '/api/((?!test-helpers).*)',
 };

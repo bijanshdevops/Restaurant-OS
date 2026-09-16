@@ -1,11 +1,9 @@
 name: CI Pipeline
-
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
-
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -17,30 +15,44 @@ jobs:
           POSTGRES_PASSWORD: password
         ports:
           - 5432:5432
-    
     steps:
       - uses: actions/checkout@v3
-      
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '20'
           cache: 'npm'
-          
       - name: Install dependencies
         run: npm ci
-        
       - name: Validate TypeScript
         run: npx tsc --noEmit
-        
       - name: Run Prisma Migrations (Test DB)
         run: npx prisma migrate deploy
         env:
           DATABASE_URL: postgresql://postgres:password@localhost:5432/restaurants_os_test
-          
+      - name: Start dev server (with test-only routes enabled)
+        run: |
+          npm run dev > dev-server.log 2>&1 &
+          echo "در حال انتظار برای آماده شدن سرور..."
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:3000 > /dev/null; then
+              echo "سرور آماده است."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "سرور در زمان مقرر بالا نیامد. لاگ سرور:"
+          cat dev-server.log
+          exit 1
+        env:
+          DATABASE_URL: postgresql://postgres:password@localhost:5432/restaurants_os_test
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          ENABLE_TEST_ROUTES: '1'
       - name: Run E2E Tests
         run: npm test
         env:
           DATABASE_URL: postgresql://postgres:password@localhost:5432/restaurants_os_test
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      - name: Dump dev server log on failure
+        if: failure()
+        run: cat dev-server.log || true

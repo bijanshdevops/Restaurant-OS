@@ -20,14 +20,13 @@ export async function getSettings() {
       });
     }
 
-    // tspApiKey یک مقدار حساس است و فقط باید نزد ADMIN قابل مشاهده باشد،
-    // نه هر کاربر واردشده‌ای (مثل صندوق‌دار یا آشپز) که فقط برای خواندن
-    // تنظیمات عمومی (مالیات، بسته‌بندی و...) این اکشن را صدا می‌زند.
-    const isAdmin = auth.user?.roles?.includes('ADMIN');
-    const { tspApiKey, ...rest } = settings;
-    const safeSettings = isAdmin ? settings : { ...rest, tspApiKey: '' };
+    // tspApiKey یک مقدار حساس است و هرگز نباید در پاسخ این اکشن برگردد —
+    // حتی برای ADMIN. الگوی «کلید یک‌طرفه» (write-only): کلاینت فقط از
+    // hasApiKey باخبر می‌شود که آیا کلیدی ثبت شده یا نه، و برای تغییر آن
+    // باید مقدار جدید را از طریق updateModianSettings ارسال کند.
+    const { tspApiKey, ...safeSettings } = settings;
 
-    return { success: true, settings: { ...safeSettings, hasApiKey: !!tspApiKey } };
+    return { success: true, settings: { ...safeSettings, tspApiKey: '', hasApiKey: !!tspApiKey } };
   } catch (error) {
     console.error('Error fetching settings:', error);
     return { success: false, error: 'خطا در دریافت تنظیمات' };

@@ -9,6 +9,14 @@ describe('سفارش‌ها: صحت قیمت و چرخه آشپزخانه', () =
   beforeAll(async () => {
     admin = await loginAsAdmin();
 
+    // اطمینان از وجود ردیف تنظیمات پیش از ثبت هرگونه سفارش: در یک دیتابیس
+    // کاملاً خالی (مثل محیط CI)، اگر هیچ سفارشی پیش از این ثبت نشده و هیچ‌کس
+    // getSettings/updateSettings را صدا نزده باشد، createOrder ردیف تنظیمات
+    // را پیدا نمی‌کند و مالیات/بسته‌بندی را صفر در نظر می‌گیرد. برای اینکه
+    // این تست دقیقاً همان محاسبه‌ی سرور را (با مالیات/بسته‌بندیِ واقعی)
+    // بسنجد، ابتدا مطمئن می‌شویم ردیف تنظیمات ساخته شده است.
+    await admin.call('getSettings');
+
     const items = await admin.call('getMenuItems');
     if (Array.isArray(items) && items.length > 0) {
       menuItemId = items[0].id;

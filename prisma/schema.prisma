@@ -45,9 +45,12 @@ model Order {
   status      OrderStatus @default(PENDING)
   totalAmount Float
   customerId  String?
+  tableId     String?
   createdAt   DateTime    @default(now())
   items       OrderItem[]
   customer    Customer?   @relation(fields: [customerId], references: [id])
+  table       Table?      @relation(fields: [tableId], references: [id])
+  taxInvoice  TaxInvoice?
 }
 
 enum OrderStatus {
@@ -93,14 +96,15 @@ model RecipeItem {
 }
 
 model Customer {
-  id          String      @id @default(uuid())
-  fullName    String
-  phone       String      @unique
-  totalOrders Int         @default(0)
-  totalSpent  Float       @default(0)
-  loyaltyTier LoyaltyTier @default(NORMAL)
-  lastVisit   DateTime    @default(now()) @updatedAt
-  orders      Order[]
+  id           String        @id @default(uuid())
+  fullName     String
+  phone        String        @unique
+  totalOrders  Int           @default(0)
+  totalSpent   Float         @default(0)
+  loyaltyTier  LoyaltyTier   @default(NORMAL)
+  lastVisit    DateTime      @default(now()) @updatedAt
+  orders       Order[]
+  reservations Reservation[]
 }
 
 model RestaurantSettings {
@@ -110,7 +114,83 @@ model RestaurantSettings {
   restaurantName String   @default("رستوران نمونه سیستم‌عامل")
   contactNumber  String   @default("")
   footerMessage  String   @default("")
+
+  // سامانه مودیان (از طریق معتمد مالیاتی / TSP)
+  modianEnabled    Boolean @default(false)
+  economicCode     String  @default("")
+  nationalId       String  @default("")
+  tspProviderName  String  @default("")
+  tspApiBaseUrl    String  @default("")
+  tspApiKey        String  @default("")
+
   updatedAt      DateTime @updatedAt
+}
+
+model Table {
+  id           String        @id @default(uuid())
+  number       Int           @unique
+  capacity     Int           @default(4)
+  status       TableStatus   @default(AVAILABLE)
+  createdAt    DateTime      @default(now())
+  orders       Order[]
+  reservations Reservation[]
+}
+
+enum TableStatus {
+  AVAILABLE
+  OCCUPIED
+  RESERVED
+  CLEANING
+}
+
+model Reservation {
+  id              String            @id @default(uuid())
+  tableId         String
+  customerId      String?
+  guestName       String
+  guestPhone      String
+  partySize       Int
+  reservationTime DateTime
+  status          ReservationStatus @default(PENDING)
+  notes           String            @default("")
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  table    Table     @relation(fields: [tableId], references: [id])
+  customer Customer? @relation(fields: [customerId], references: [id])
+}
+
+enum ReservationStatus {
+  PENDING
+  CONFIRMED
+  SEATED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+model TaxInvoice {
+  id              String           @id @default(uuid())
+  orderId         String           @unique
+  status          TaxInvoiceStatus @default(PENDING)
+  payload         Json
+  uid             String?
+  referenceNumber String?
+  taxUid          String?
+  errorMessage    String?
+  sentAt          DateTime?
+  confirmedAt     DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id])
+}
+
+enum TaxInvoiceStatus {
+  PENDING
+  SENT
+  CONFIRMED
+  FAILED
 }
 
 enum LoyaltyTier {

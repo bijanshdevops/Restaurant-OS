@@ -57,6 +57,10 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               {(hasRole('ADMIN') || hasRole('ACCOUNTANT')) && (
                 <Link href="/dashboard/accounting" className="text-gray-600 hover:text-blue-600 px-3 py-2 rounded-md text-sm font-medium transition-colors">حسابداری</Link>
               )}
+
+              {(hasRole('ADMIN') || hasRole('ACCOUNTANT')) && (
+                <Link href="/dashboard/modian" className="text-gray-600 hover:text-blue-600 px-3 py-2 rounded-md text-sm font-medium transition-colors">سامانه مودیان</Link>
+              )}
               
               {(hasRole('ADMIN') || hasRole('INVENTORY_MANAGER')) && (
                 <Link href="/dashboard/inventory" className="text-gray-600 hover:text-blue-600 px-3 py-2 rounded-md text-sm font-medium transition-colors">انبار</Link>
@@ -64,6 +68,10 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
               {(hasRole('ADMIN') || hasRole('CASHIER')) && (
                 <Link href="/dashboard/crm" className="text-gray-600 hover:text-blue-600 px-3 py-2 rounded-md text-sm font-medium transition-colors">مشتریان</Link>
+              )}
+
+              {(hasRole('ADMIN') || hasRole('CASHIER')) && (
+                <Link href="/dashboard/reservations" className="text-gray-600 hover:text-blue-600 px-3 py-2 rounded-md text-sm font-medium transition-colors">میز و رزرو</Link>
               )}
               
               {hasRole('ADMIN') && (

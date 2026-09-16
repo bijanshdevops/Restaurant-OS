@@ -65,15 +65,28 @@ export default function KitchenPage() {
   }, [fetchOrders]);
 
   const moveOrder = async (orderId: string, newStatus: OrderStatus) => {
+    // Keep a snapshot so we can roll back if the server update fails
+    const previousOrders = orders;
+
     // Optimistic UI update
     if (newStatus === 'COMPLETED') {
       setOrders(prev => prev.filter(o => o.id !== orderId));
     } else {
       setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: newStatus } : o));
     }
-    
+
     // Server update
-    await updateOrderStatus(orderId, newStatus);
+    try {
+      const res = await updateOrderStatus(orderId, newStatus);
+      if (!res?.success) {
+        // Roll back the optimistic update and re-sync with the server
+        setOrders(previousOrders);
+        await fetchOrders();
+      }
+    } catch {
+      setOrders(previousOrders);
+      await fetchOrders();
+    }
   };
 
   const getElapsedTime = (date: Date) => {

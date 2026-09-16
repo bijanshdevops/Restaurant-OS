@@ -35,13 +35,13 @@ jobs:
           npm run dev > dev-server.log 2>&1 &
           echo "در حال انتظار برای آماده شدن سرور..."
           for i in $(seq 1 60); do
-            if curl -sf http://localhost:3000 > /dev/null; then
+            if curl -sf http://127.0.0.1:3000 > /dev/null; then
               echo "سرور روی / پاسخ می‌دهد."
               break
             fi
             sleep 2
           done
-          if ! curl -sf http://localhost:3000 > /dev/null; then
+          if ! curl -sf http://127.0.0.1:3000 > /dev/null; then
             echo "سرور در زمان مقرر بالا نیامد. لاگ سرور:"
             cat dev-server.log
             exit 1
@@ -52,7 +52,7 @@ jobs:
           # درگیر آن نشود.
           echo "در حال گرم کردن مسیر /api/test-helpers..."
           for i in $(seq 1 30); do
-            code=$(curl -s -o /tmp/warmup.json -w "%{http_code}" -X POST http://localhost:3000/api/test-helpers \
+            code=$(curl -s -o /tmp/warmup.json -w "%{http_code}" -X POST http://127.0.0.1:3000/api/test-helpers \
               -H "Content-Type: application/json" \
               -d '{"action":"login","args":["admin","123"]}')
             if [ "$code" = "200" ]; then
@@ -75,6 +75,7 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:password@localhost:5432/restaurants_os_test
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          TEST_BASE_URL: http://127.0.0.1:3000
       - name: Dump dev server log on failure
         if: failure()
         run: cat dev-server.log || true

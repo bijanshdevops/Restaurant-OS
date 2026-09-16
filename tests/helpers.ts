@@ -5,7 +5,11 @@
  * (Server Action پشت یک سشن واقعی) را طی کنند، نه یک شبیه‌سازی جدا.
  */
 
-const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
+// از 127.0.0.1 به‌جای localhost استفاده می‌کنیم: در برخی محیط‌ها (مثل رانرهای
+// لینوکسی CI) پیاده‌سازی fetch در Node.js ممکن است «localhost» را ابتدا به
+// ::1 (IPv6) resolve کند، درحالی‌که سرور Next.js فقط روی IPv4 گوش می‌دهد؛
+// نتیجه‌اش اتصال ناموفق یا هنگ کردن درخواست‌ها (و timeout کاذب تست‌ها) است.
+const BASE_URL = process.env.TEST_BASE_URL || 'http://127.0.0.1:3000';
 
 export class TestClient {
   private cookie: string | null = null;

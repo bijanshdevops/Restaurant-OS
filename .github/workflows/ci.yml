@@ -36,12 +36,34 @@ jobs:
           echo "در حال انتظار برای آماده شدن سرور..."
           for i in $(seq 1 60); do
             if curl -sf http://localhost:3000 > /dev/null; then
-              echo "سرور آماده است."
+              echo "سرور روی / پاسخ می‌دهد."
+              break
+            fi
+            sleep 2
+          done
+          if ! curl -sf http://localhost:3000 > /dev/null; then
+            echo "سرور در زمان مقرر بالا نیامد. لاگ سرور:"
+            cat dev-server.log
+            exit 1
+          fi
+          # گرم کردن مسیر واقعی تست‌ها: در حالت dev، اولین درخواست به هر
+          # مسیر (و اولین راه‌اندازی موتور Prisma) می‌تواند چند ثانیه طول
+          # بکشد. این کامپایل را همین‌جا انجام می‌دهیم تا مهلت خودِ تست‌ها
+          # درگیر آن نشود.
+          echo "در حال گرم کردن مسیر /api/test-helpers..."
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /tmp/warmup.json -w "%{http_code}" -X POST http://localhost:3000/api/test-helpers \
+              -H "Content-Type: application/json" \
+              -d '{"action":"login","args":["admin","123"]}')
+            if [ "$code" = "200" ]; then
+              echo "مسیر تست‌ها آماده است."
               exit 0
             fi
             sleep 2
           done
-          echo "سرور در زمان مقرر بالا نیامد. لاگ سرور:"
+          echo "گرم کردن مسیر تست‌ها ناموفق بود (کد آخر: $code). پاسخ آخر:"
+          cat /tmp/warmup.json || true
+          echo "لاگ سرور:"
           cat dev-server.log
           exit 1
         env:

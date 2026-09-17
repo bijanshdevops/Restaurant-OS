@@ -3,6 +3,7 @@
 import { prisma } from '@/lib/prisma';
 import { randomBytes } from 'crypto';
 import { requireRole, resolveBranchFilter, isBranchExempt } from '@/lib/auth';
+import { SYSTEM_CATEGORY_IDS } from '@/lib/accountingCategories';
 
 const PROCUREMENT_ROLES = ['ADMIN', 'INVENTORY_MANAGER', 'ACCOUNTANT'] as const;
 
@@ -234,6 +235,10 @@ export async function receivePurchaseOrderItems(purchaseOrderId: string, receipt
             description: `خرید کالا از تأمین‌کننده — سفارش ${po.poNumber}`,
             amount: batchCost,
             branchId: po.branchId,
+            categoryId: SYSTEM_CATEGORY_IDS.EXPENSE_PURCHASE,
+            referenceType: 'PURCHASE_ORDER',
+            referenceId: po.id,
+            createdByUserId: auth.user.id,
           },
         });
         await tx.supplier.update({

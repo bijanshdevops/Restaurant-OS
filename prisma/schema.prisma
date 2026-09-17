@@ -34,6 +34,9 @@ model User {
   // --- Phase 6: CRM & marketing ---
   customerNotes    CustomerNote[]
   createdCampaigns Campaign[]
+
+  // --- Phase 7: full accounting & tax ---
+  createdTransactions Transaction[] @relation("TransactionCreatedBy")
 }
 
 enum Role {
@@ -93,6 +96,13 @@ model Order {
 
   // --- Phase 6: CRM & marketing ---
   feedback OrderFeedback?
+
+  // --- Phase 7: full accounting & tax ---
+  // مبلغ مالیات این سفارش، همان لحظه‌ی ثبت سفارش محاسبه و ذخیره می‌شود تا
+  // بعداً (هنگام ثبت تراکنش درآمد در حسابداری) بدون نیاز به محاسبه‌ی مجدد
+  // و بدون ریسک ناهم‌خوانی با نرخ مالیات فعلی تنظیمات، در دسترس باشد.
+  // سفارش‌های قدیمی‌تر از این migration مقدار ۰ دارند.
+  taxAmount Float @default(0)
 }
 
 enum OrderStatus {
@@ -412,11 +422,68 @@ model Transaction {
   // حقوق) مقداردهی می‌شوند؛ تراکنش سفارش‌های آنلاین فعلاً بدون شعبه‌اند.
   branchId String?
   branch   Branch? @relation(fields: [branchId], references: [id])
+
+  // --- Phase 7: full accounting & tax ---
+  // مبلغ مالیات این تراکنش (برای درآمد: مالیات فروش/خروجی؛ برای هزینه:
+  // مالیات خریدِ برآوردی/ورودی) — جدا از amount نگه‌داشته می‌شود تا گزارش
+  // مالیات (خروجی منهای ورودی) قابل محاسبه باشد، بدون آنکه به معماری کامل
+  // دفترداری دوطرفه (debit/credit ledger) نیاز باشد.
+  taxAmount Float @default(0)
+
+  // دسته‌بندی حساب (Chart of Accounts سبک‌وزن). تراکنش‌های خودکار (سفارش،
+  // خرید کالا، حقوق) با دسته‌ی سیستمی مربوطه برچسب می‌خورند؛ تراکنش‌های
+  // دستی پیش‌فرض روی «سایر درآمدها/هزینه‌ها» می‌روند مگر کاربر دسته‌ی
+  // دیگری انتخاب کند.
+  categoryId String?
+  category   TransactionCategory? @relation(fields: [categoryId], references: [id])
+
+  // ردیابی منبع: این تراکنش از کدام رویداد واقعی کسب‌وکار ساخته شده
+  // (مثلاً 'ORDER' + شناسه‌ی سفارش). تراکنش‌های دستی این دو فیلد را خالی
+  // دارند و همین، معیار مجاز بودن حذف (deleteTransaction) است — یک تراکنش
+  // که پشتوانه‌ی رویداد واقعی دارد هرگز حذف نمی‌شود، فقط قابل بازطبقه‌بندی
+  // (recategorize) است.
+  referenceType String?
+  referenceId   String?
+
+  createdByUserId String?
+  createdBy       User?   @relation("TransactionCreatedBy", fields: [createdByUserId], references: [id])
+
+  @@index([categoryId])
+  @@index([referenceType, referenceId])
 }
 
 enum TransactionType {
   INCOME
   EXPENSE
+}
+
+// --- Phase 7: full accounting & tax ---
+enum TransactionCategoryType {
+  INCOME
+  EXPENSE
+}
+
+model TransactionCategory {
+  id   String                  @id @default(uuid())
+  name String
+  type TransactionCategoryType
+
+  // دسته‌های سیستمی (فروش POS، فروش آنلاین، خرید کالا، حقوق و دستمزد، سایر
+  // درآمدها/هزینه‌ها) با شناسه‌ی ثابت در migration ساخته می‌شوند و توسط
+  // اکشن‌های خودکار حسابداری استفاده می‌شوند؛ حذف‌شدنی نیستند (فقط
+  // دسته‌های ساخته‌شده توسط کاربر قابل حذف‌اند، آن‌هم وقتی هیچ تراکنشی به
+  // آن‌ها متصل نباشد).
+  isSystem Boolean @default(false)
+
+  // نرخ پیش‌فرض مالیات این دسته (درصد) — برای محاسبه‌ی خودکار taxAmount
+  // وقتی کاربر مقدار مالیات را صریحاً وارد نکند. null یعنی این دسته
+  // به‌طور پیش‌فرض مشمول مالیات نیست.
+  taxRatePercent Float?
+
+  createdAt    DateTime      @default(now())
+  transactions Transaction[]
+
+  @@unique([name, type])
 }
 
 model Printer {

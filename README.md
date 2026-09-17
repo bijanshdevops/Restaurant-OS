@@ -239,6 +239,51 @@ Covered end-to-end by `tests/crm.test.ts`.
 
 ---
 
+## Full Accounting & Tax (Phase 7)
+
+A practical accounting layer on top of the original flat `Transaction` log: categorization (chart of accounts), tax tracking, financial reporting, and export — deliberately **single-entry**, not full double-entry/debit-credit bookkeeping.
+
+### Data model
+
+- **`TransactionCategory`**: `name`, `type` (`INCOME`/`EXPENSE`), optional `taxRatePercent`, `isSystem`. Six system categories are seeded and cannot be renamed or deleted: فروش حضوری (POS), فروش آنلاین, سایر درآمدها, خرید کالا و مواد اولیه, حقوق و دستمزد, سایر هزینه‌ها. ADMIN/ACCOUNTANT can add, edit, or delete their own custom categories (a category with any linked transactions cannot be deleted).
+- **`Transaction`** gained `categoryId`, `taxAmount`, `referenceType`/`referenceId` (linking an automatic transaction back to the real event that created it — an `Order`, `PurchaseOrder`, or `PAYROLL` payment), and `createdByUserId`.
+- **`Order.taxAmount`** is now persisted at order-creation time (POS and online), so the income transaction booked when an order is paid always carries the *exact* tax computed at checkout — never recomputed or estimated later.
+
+### Automatic bookkeeping
+
+Every order, purchase-order receipt, and payroll run already booked a `Transaction` before this phase; Phase 7 only adds categorization and tax to those same automatic postings — no new manual step for staff:
+
+- POS order → INCOME, category «فروش حضوری», exact checkout tax.
+- Online order (after payment) → INCOME, category «فروش آنلاین», exact checkout tax.
+- Purchase-order receipt → EXPENSE, category «خرید کالا و مواد اولیه» (tax 0 unless a human edits it — no input-VAT is invented).
+- Payroll run → EXPENSE, category «حقوق و دستمزد».
+
+### Manual entries, editing, and tax
+
+- ADMIN/ACCOUNTANT can record a manual `createIncome`/`createExpense` against any category. If the category has a `taxRatePercent` and no explicit tax is given, the entered amount is treated as **tax-inclusive**, and the tax portion is backed out automatically (`amount − amount / (1 + rate/100)`).
+- `updateTransactionCategory` lets a transaction be recategorized or have its tax corrected after the fact (including automatic ones) — but never changes its `amount`/`type`, and a new category must match the transaction's existing income/expense type.
+- **Deletion is ADMIN-only and manual-transactions-only**: any transaction with a `referenceType` (i.e. generated automatically from a real order/purchase/payroll event) can be recategorized but never deleted, so the accounting trail always matches what actually happened operationally.
+
+### Reporting & export
+
+- `getFinancialSummary` / `getProfitAndLossReport` compute income/expense by category, net profit, and a VAT-style summary (output tax from income, input tax from expenses, net payable) over a branch/date-range filter.
+- The dashboard's **"چاپ گزارش"** button opens the browser's native print view (no server-side PDF generation exists in this project); a genuine downloadable file is provided via **Excel (.xlsx) export** (`exportTransactionsToExcel`), which was already a project dependency.
+
+### Known limitations (by design, for this phase)
+
+- **Single-entry, not double-entry.** There is no debit/credit ledger, no journal entries, and no trial balance/balance sheet — this was an explicit scope choice over full enterprise bookkeeping.
+- **No true customer accounts-receivable.** Every order in this system is paid at the POS or via the online gateway before fulfillment — there is no credit-sale/unpaid-order mechanism anywhere to hang an AR ledger off of. Supplier accounts-payable (from Phase 3's `getSupplierLedger`) already covers the AP side.
+- **"PDF export" is a print view, not a generated file** — see Reporting & export above.
+
+### Access & scope
+
+- Kept identical to the pre-existing model: all accounting functions require `ADMIN` or `ACCOUNTANT`, except transaction deletion, which is `ADMIN`-only.
+- Transactions remain branch-scoped exactly like Phase 5 (non-exempt staff only see their own branch's transactions; `ADMIN` sees all and can filter by branch).
+
+Covered end-to-end by `tests/accounting.test.ts`.
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, review process, and branching model.

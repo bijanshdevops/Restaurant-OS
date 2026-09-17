@@ -2,6 +2,7 @@
 
 import { prisma } from '@/lib/prisma';
 import { requireRole, resolveBranchFilter, resolveBranchForCreate } from '@/lib/auth';
+import { SYSTEM_CATEGORY_IDS } from '@/lib/accountingCategories';
 
 // مدیریت شیفت‌ها، تخصیص پرسنل، بازبینی درخواست‌ها و اجرای حقوق‌دهی فقط
 // در اختیار مدیر سیستم است. اقدامات خودخدمت (مشاهده شیفت‌های خودم، ثبت
@@ -608,6 +609,10 @@ export async function runPayroll(userId: string, periodStart: string, periodEnd:
           description: `پرداخت حقوق ${user.name} (${periodStart.slice(0, 10)} تا ${periodEnd.slice(0, 10)})`,
           amount: totalAmount,
           branchId: user.branchId,
+          categoryId: SYSTEM_CATEGORY_IDS.EXPENSE_PAYROLL,
+          referenceType: 'PAYROLL',
+          referenceId: created.id,
+          createdByUserId: auth.user.id,
         },
       });
 

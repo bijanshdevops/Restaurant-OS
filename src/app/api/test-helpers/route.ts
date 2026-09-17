@@ -38,7 +38,20 @@ import {
 } from '@/app/actions/delivery';
 import { getInventoryItems, createInventoryItem, restockInventoryItem } from '@/app/actions/inventory';
 import { getMenuCostAnalysis, getMenuItemRecipe, saveMenuItemRecipe, updateInventoryItemCost } from '@/app/actions/costing';
-import { getTransactions, createExpense } from '@/app/actions/accounting';
+import {
+  getTransactions,
+  createExpense,
+  createIncome,
+  updateTransactionCategory,
+  deleteTransaction,
+  getCategories,
+  createCategory,
+  updateCategory,
+  deleteCategory,
+  getFinancialSummary,
+  getProfitAndLossReport,
+  exportTransactionsToExcel,
+} from '@/app/actions/accounting';
 import {
   getSuppliers,
   createSupplier,
@@ -153,6 +166,16 @@ const actions: Record<string, (...args: any[]) => Promise<any>> = {
   updateInventoryItemCost,
   getTransactions,
   createExpense,
+  createIncome,
+  updateTransactionCategory,
+  deleteTransaction,
+  getCategories,
+  createCategory,
+  updateCategory,
+  deleteCategory,
+  getFinancialSummary,
+  getProfitAndLossReport,
+  exportTransactionsToExcel,
   getSuppliers,
   createSupplier,
   updateSupplier,

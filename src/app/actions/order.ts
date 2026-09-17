@@ -7,6 +7,7 @@ import { requireRole, resolveBranchFilter, resolveBranchForCreate, isBranchExemp
 import { requireCustomer } from '@/lib/customerAuth';
 import { awardLoyaltyForOrder } from '@/lib/loyalty';
 import { getDefaultBranchId } from './branch';
+import { SYSTEM_CATEGORY_IDS } from '@/lib/accountingCategories';
 
 interface CartItem {
   menuItemId: string;
@@ -87,6 +88,7 @@ export async function createOrder(cartItems: CartItem[], customerId?: string, br
         data: {
           orderNumber,
           totalAmount,
+          taxAmount,
           status: 'PENDING',
           customerId: customerId || null,
           branchId: effectiveBranchId,
@@ -131,7 +133,12 @@ export async function createOrder(cartItems: CartItem[], customerId?: string, br
           type: 'INCOME',
           description: `درآمد از سفارش ${orderNumber}`,
           amount: totalAmount,
+          taxAmount,
           branchId: effectiveBranchId,
+          categoryId: SYSTEM_CATEGORY_IDS.INCOME_POS,
+          referenceType: 'ORDER',
+          referenceId: order.id,
+          createdByUserId: auth.user.id,
         },
       });
 
@@ -270,6 +277,7 @@ export async function createOnlineOrder(
         data: {
           orderNumber,
           totalAmount,
+          taxAmount,
           status: 'AWAITING_PAYMENT',
           channel: 'ONLINE_DELIVERY',
           customerId: customer.id,
@@ -388,6 +396,10 @@ export async function finalizeOnlineOrderAfterPayment(orderId: string) {
         type: 'INCOME',
         description: `درآمد از سفارش آنلاین ${order.orderNumber}`,
         amount: order.totalAmount,
+        taxAmount: order.taxAmount,
+        categoryId: SYSTEM_CATEGORY_IDS.INCOME_ONLINE,
+        referenceType: 'ORDER',
+        referenceId: order.id,
       },
     });
 

@@ -15,4 +15,6 @@ export const SYSTEM_CATEGORY_IDS = {
   EXPENSE_PURCHASE: 'txcat-expense-purchase',
   EXPENSE_PAYROLL: 'txcat-expense-payroll',
   EXPENSE_OTHER: 'txcat-expense-other',
+  // --- Phase 10: refunds & returns ---
+  EXPENSE_REFUND: 'txcat-expense-refund',
 } as const;

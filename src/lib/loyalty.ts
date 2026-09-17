@@ -133,3 +133,76 @@ export async function awardLoyaltyForOrder(
 
   return pointsEarned;
 }
+
+interface ReverseLoyaltyParams {
+  customerId: string;
+  orderId: string;
+  orderNumber: string;
+  /** امتیازی که باید به‌دلیل این مرجوعی از موجودی مشتری کسر شود (سهم مرجوع‌شده از امتیاز کسب‌شده‌ی سفارش). */
+  pointsToClaw: number;
+  /** امتیازی که باید برگردانده شود، چون مشتری در همین سفارش برای پرداخت آن استفاده کرده بود (سهم مرجوع‌شده). */
+  pointsToReturn: number;
+  /** مبلغی که باید از totalSpent کسر شود (سهم مرجوع‌شده از مبلغ سفارش). */
+  refundedAmount: number;
+  /** فقط برای مرجوعی‌ای که سفارش را به‌طور کامل مرجوع می‌کند: یک عدد از totalOrders کم می‌کند. */
+  decrementOrderCount?: boolean;
+}
+
+/**
+ * برگشت اثرات باشگاه مشتریان یک مرجوعی (کامل یا جزئی) روی حساب مشتری —
+ * برعکسِ awardLoyaltyForOrder. چون هر مرجوعی حداکثر به‌اندازه‌ی مانده‌ی
+ * تعدادِ هر ردیف سفارش مجاز است (نک. refund.ts)، مجموع pointsToClaw و
+ * refundedAmount در طول عمر یک سفارش، در همه‌ی مرجوعی‌های آن، هرگز از مقدار
+ * اصلی سفارش بیشتر نمی‌شود — پس این تابع نیازی به آگاهی از تاریخچه‌ی
+ * مرجوعی‌های قبلی همان سفارش ندارد و می‌تواند مستقل برای هر مرجوعی صدا زده
+ * شود. pointsBalance/totalSpent هرگز منفی نمی‌شوند (کف صفر).
+ *
+ * باید داخل همان تراکنش Prisma‌ای صدا زده شود که رکورد Refund را می‌سازد.
+ */
+export async function reverseLoyaltyForRefund(
+  tx: Prisma.TransactionClient,
+  params: ReverseLoyaltyParams
+): Promise<void> {
+  const { customerId, orderId, orderNumber, pointsToClaw, pointsToReturn, refundedAmount, decrementOrderCount } = params;
+
+  const customer = await tx.customer.findUnique({ where: { id: customerId } });
+  if (!customer) return;
+
+  const newTotalSpent = Math.max(0, customer.totalSpent - refundedAmount);
+  const newPointsBalance = Math.max(0, customer.pointsBalance + pointsToReturn - pointsToClaw);
+  const newTotalOrders = decrementOrderCount ? Math.max(0, customer.totalOrders - 1) : customer.totalOrders;
+
+  await tx.customer.update({
+    where: { id: customerId },
+    data: {
+      totalOrders: newTotalOrders,
+      totalSpent: newTotalSpent,
+      pointsBalance: newPointsBalance,
+      loyaltyTier: tierForLifetimeSpend(newTotalSpent),
+    },
+  });
+
+  if (pointsToClaw > 0) {
+    await tx.loyaltyTransaction.create({
+      data: {
+        customerId,
+        type: 'ADJUSTED',
+        points: -pointsToClaw,
+        orderId,
+        description: `کسر امتیاز به‌دلیل مرجوعی سفارش ${orderNumber}`,
+      },
+    });
+  }
+
+  if (pointsToReturn > 0) {
+    await tx.loyaltyTransaction.create({
+      data: {
+        customerId,
+        type: 'ADJUSTED',
+        points: pointsToReturn,
+        orderId,
+        description: `بازگشت امتیاز استفاده‌شده به‌دلیل مرجوعی سفارش ${orderNumber}`,
+      },
+    });
+  }
+}

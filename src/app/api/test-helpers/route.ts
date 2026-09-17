@@ -89,6 +89,7 @@ import {
   getPayrollHistory,
 } from '@/app/actions/staffSchedule';
 import { getSalesAnalytics } from '@/app/actions/analytics';
+import { findOrderForRefund, createRefund, getRefunds } from '@/app/actions/refund';
 
 /**
  * دروازه‌ی کمکی مخصوص تست‌های خودکار (Vitest / CI).
@@ -210,6 +211,9 @@ const actions: Record<string, (...args: any[]) => Promise<any>> = {
   runPayroll,
   getPayrollHistory,
   getSalesAnalytics,
+  findOrderForRefund,
+  createRefund,
+  getRefunds,
 };
 
 function guard() {

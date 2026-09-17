@@ -5,7 +5,7 @@ import { randomBytes } from 'crypto';
 import { OrderStatus, Prisma } from '@prisma/client';
 import { requireRole, resolveBranchFilter, resolveBranchForCreate, isBranchExempt } from '@/lib/auth';
 import { requireCustomer } from '@/lib/customerAuth';
-import { awardLoyaltyForOrder } from '@/lib/loyalty';
+import { awardLoyaltyForOrder, pointsForAmount } from '@/lib/loyalty';
 import { getDefaultBranchId } from './branch';
 import { SYSTEM_CATEGORY_IDS } from '@/lib/accountingCategories';
 
@@ -83,12 +83,26 @@ export async function createOrder(cartItems: CartItem[], customerId?: string, br
       const packagingCost = settings?.packagingCost ?? 0;
       const totalAmount = subtotal + taxAmount + packagingCost;
 
+      // --- Phase 10: refunds & returns ---
+      // Order.pointsEarned تا پیش از این فقط توسط جریان سفارش آنلاین
+      // (finalizeOnlineOrderAfterPayment) ذخیره می‌شد؛ برای سفارش‌های POS
+      // خالی (۰) می‌ماند، هرچند امتیاز واقعاً به مشتری تعلق می‌گرفت
+      // (awardLoyaltyForOrder زیر). این یعنی منطق برگشت تناسبیِ امتیاز در
+      // مرجوعی (refund.ts) برای سفارش‌های POS همیشه ۰ امتیاز کسر می‌کرد.
+      // این‌جا همان مقداری که awardLoyaltyForOrder محاسبه می‌کند، روی خودِ
+      // سفارش هم ذخیره می‌شود تا آن اکشن بتواند بدون محاسبه‌ی مجدد
+      // (و بدون ریسک ناهم‌خوانی با نرخ فعلیِ تنظیمات) از آن استفاده کند.
+      const pointsEarned = customerId
+        ? pointsForAmount(totalAmount, settings?.loyaltyPointsPerTenThousand ?? 1)
+        : 0;
+
       // 2. Create the main order
       const order = await tx.order.create({
         data: {
           orderNumber,
           totalAmount,
           taxAmount,
+          pointsEarned,
           status: 'PENDING',
           customerId: customerId || null,
           branchId: effectiveBranchId,

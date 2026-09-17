@@ -37,6 +37,9 @@ model User {
 
   // --- Phase 7: full accounting & tax ---
   createdTransactions Transaction[] @relation("TransactionCreatedBy")
+
+  // --- Phase 10: refunds & returns ---
+  createdRefunds Refund[] @relation("RefundCreatedBy")
 }
 
 enum Role {
@@ -110,6 +113,9 @@ model Order {
   // و بدون ریسک ناهم‌خوانی با نرخ مالیات فعلی تنظیمات، در دسترس باشد.
   // سفارش‌های قدیمی‌تر از این migration مقدار ۰ دارند.
   taxAmount Float @default(0)
+
+  // --- Phase 10: refunds & returns ---
+  refunds Refund[]
 }
 
 enum OrderStatus {
@@ -145,6 +151,13 @@ model OrderItem {
 
   order    Order    @relation(fields: [orderId], references: [id])
   menuItem MenuItem @relation(fields: [menuItemId], references: [id])
+
+  // --- Phase 10: refunds & returns ---
+  // مجموع تعدادی که تاکنون از همین ردیف سفارش مرجوع شده؛ هرگز نمی‌تواند از
+  // quantity بیشتر شود. یک آیتم وقتی «کاملاً مرجوع‌شده» است که این مقدار با
+  // quantity برابر باشد.
+  refundedQuantity Int          @default(0)
+  refundItems      RefundItem[]
 }
 
 // از فاز ۵ (چند شعبه‌ای) به بعد، InventoryItem فقط «کاتالوگ» مشترک بین همه‌ی
@@ -837,4 +850,46 @@ model OrderFeedback {
   customer Customer @relation(fields: [customerId], references: [id])
 
   @@index([customerId])
+}
+
+// --- Phase 10: refunds & returns ---
+// یک رویداد مرجوعی روی یک سفارش تکمیل‌شده — جزئی (چند ردیف/تعداد مشخص) یا
+// کامل (تمام مانده‌ی هر ردیف). هر مرجوعی دقیقاً یک تراکنش EXPENSE در
+// حسابداری (دسته‌ی سیستمی «مرجوعی و استرداد») می‌سازد؛ تراکنش درآمد اصلی
+// سفارش هرگز حذف یا ویرایش نمی‌شود (طبق قاعده‌ی فاز ۷). موجودی انبار برای
+// اقلام مرجوع‌شده همیشه به شعبه‌ی سفارش (یا شعبه‌ی پیش‌فرض برای سفارش
+// آنلاینِ بدون‌شعبه) بازگردانده می‌شود — بدون تفکیک کالای سالم/معیوب.
+model Refund {
+  id             String   @id @default(uuid())
+  orderId        String
+  reason         String
+  isFullRefund   Boolean
+  subtotalAmount Float
+  taxAmount      Float    @default(0)
+  totalAmount    Float
+  createdAt      DateTime @default(now())
+
+  order           Order        @relation(fields: [orderId], references: [id])
+  items           RefundItem[]
+  createdByUserId String
+  createdBy       User         @relation("RefundCreatedBy", fields: [createdByUserId], references: [id])
+
+  @@index([orderId])
+}
+
+// یک ردیف مرجوعی: چه تعداد از کدام ردیف سفارش (OrderItem) در این رویداد
+// مرجوع شده و مبلغ متناظرش (بدون احتساب مالیات/بسته‌بندی — آن‌ها روی خودِ
+// Refund سرجمع محاسبه می‌شوند).
+model RefundItem {
+  id          String @id @default(uuid())
+  refundId    String
+  orderItemId String
+  quantity    Int
+  amount      Float
+
+  refund    Refund    @relation(fields: [refundId], references: [id], onDelete: Cascade)
+  orderItem OrderItem @relation(fields: [orderItemId], references: [id])
+
+  @@index([refundId])
+  @@index([orderItemId])
 }

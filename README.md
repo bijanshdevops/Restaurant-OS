@@ -343,6 +343,38 @@ Covered end-to-end by `tests/analytics.test.ts`.
 
 ---
 
+## Refunds & Returns (Phase 10)
+
+An `ADMIN`-only module (`/dashboard/refunds`) for reversing a `COMPLETED` order — partially (specific item/quantity lines) or fully (whatever balance of the order hasn't been refunded yet) — with the reversal propagated automatically to accounting, inventory, and (if the order has a customer) loyalty.
+
+### Eligibility and how refund state is tracked
+
+- **Only `COMPLETED` orders can be refunded.** An order still in the kitchen/delivery pipeline (`PENDING`/`PREPARING`/`READY`/`AWAITING_PAYMENT`) must be advanced or cancelled first — out of scope for this phase.
+- **No new `Order` status.** Refund history lives entirely in two new tables (`Refund`, `RefundItem`) plus a new `OrderItem.refundedQuantity` counter (capped at that item's original quantity). `Order.status` stays `COMPLETED` forever, even after a full refund — this was a deliberate choice to avoid a fragile Postgres enum migration and to avoid touching the existing exhaustive `status`-based filters in `getActiveOrders`/the kitchen board.
+- **Access is `ADMIN`-only** (the recommended, simplest option), so none of the Phase 5 branch-scoping logic applies here — an `ADMIN` can already see and act on every branch.
+
+### What a refund does
+
+- **Accounting**: books a brand-new `EXPENSE` transaction (system category "مرجوعی و استرداد") linked to the refund via `referenceType`/`referenceId`. The original `INCOME` transaction from the order is never touched or deleted, per the Phase 7 rule that a reference-backed transaction is permanent — the net effect (lower net profit, lower net VAT payable) falls out of `getFinancialSummary`/`getProfitAndLossReport` automatically.
+- **Inventory**: restocks `BranchInventoryStock` for the refunded quantity of each item, via that item's recipe (BOM) — always assumed sellable, with no damaged/spoiled-goods distinction.
+- **Tax**: reversed proportionally to the refunded items' share of the order's total item subtotal (not a flat per-item tax rate, since only one order-level `taxAmount` is stored).
+- **Packaging cost**: refunded only on a *full* refund, using the restaurant's *current* packaging-cost setting — `Order` never persisted the packaging cost actually charged at checkout, so this is the closest available approximation, and it is a known, disclosed imprecision if that setting changed since the order was placed.
+- **Delivery fee**: never refunded, in either mode — the delivery service is assumed rendered regardless of a food refund.
+- **Loyalty & customer stats** (only if the order has a customer): points earned on the order are clawed back and points redeemed are returned, both proportional to the same refunded-share ratio; `totalSpent` is decremented (floored at zero) and the loyalty tier recomputed; `totalOrders` is decremented by one only when the refund is explicitly a full refund, not as a side effect of several partial refunds happening to add up to the whole order.
+
+### A pre-existing fix bundled with this phase
+
+`Order.pointsEarned` was only ever persisted by the online-order flow — POS orders (`createOrder`) awarded the points to the customer but never wrote the amount onto the order itself, so it silently stayed `0`. This would have made the new points-clawback logic above a no-op for the majority of orders. It's now stored at order-creation time using the same calculation `awardLoyaltyForOrder` performs internally.
+
+### Known limitations (by design, for this phase)
+
+- **Sales analytics (Phase 9) is not refund-aware.** A refunded order keeps `status = COMPLETED`, so its original revenue keeps appearing, unadjusted, in the analytics dashboard — reworking analytics to net out refunds was out of scope here.
+- **No manager-approval workflow.** Any `ADMIN` can create a refund outright; there is no request/approve/reject step.
+
+Covered end-to-end by `tests/refund.test.ts`.
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, review process, and branching model.

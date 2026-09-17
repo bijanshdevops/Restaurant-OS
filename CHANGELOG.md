@@ -10,6 +10,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 ## [Unreleased]
 
 ### Added
+- Staff & shift management: shift definition and staff assignment, self-service clock-in/clock-out attendance tracking, leave and shift-swap requests with a manager approval workflow (approving a leave request frees any not-yet-worked shift assignments in that date range; approving a shift-swap transfers the assignment to the target colleague), and payroll on a fixed per-user hourly rate — computed from unpaid attendance hours, booked as an accounting EXPENSE transaction at the moment payroll is run (never speculatively), with each attendance record linked to the payment that covered it so it can never be paid twice.
+- `tests/staffSchedule.test.ts` covering the shift/attendance/request/payroll flow end-to-end.
 - Purchasing & supplier management: full purchase-order cycle (draft → ordered → partially/fully received, plus cancellation), supplier accounts payable with a per-supplier ledger and payment recording, low-stock reorder suggestions, and cross-supplier purchase-price history. Stock, cost, and the accounting/EXPENSE booking only ever move at actual goods receipt, never at order/draft time.
 - `tests/procurement.test.ts` covering the purchasing flow end-to-end.
 - Online ordering & delivery: customer accounts with SMS OTP login, public menu/cart, checkout with server-verified pricing, ZarinPal payment integration (sandbox by default), order tracking, and a staff delivery dashboard with full courier lifecycle management (assign → picked up → on the way → delivered).

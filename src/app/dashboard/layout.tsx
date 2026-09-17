@@ -85,6 +85,9 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               {(hasRole('ADMIN') || hasRole('INVENTORY_MANAGER') || hasRole('ACCOUNTANT')) && (
                 <Link href="/dashboard/suppliers" className="text-gray-600 hover:text-blue-600 px-3 py-2 rounded-md text-sm font-medium transition-colors">تأمین‌کنندگان</Link>
               )}
+
+              {/* هر پرسنل واردشده، صرف‌نظر از نقش، برای مشاهده شیفت خودش و ثبت حضور و غیاب به این صفحه دسترسی دارد. */}
+              <Link href="/dashboard/staff" className="text-gray-600 hover:text-blue-600 px-3 py-2 rounded-md text-sm font-medium transition-colors">پرسنل و شیفت‌ها</Link>
               
               {hasRole('ADMIN') && (
                 <Link href="/dashboard/admin" className="text-amber-600 hover:text-amber-700 px-3 py-2 rounded-md text-sm font-bold transition-colors bg-amber-50 border border-amber-100">پنل مدیریت</Link>

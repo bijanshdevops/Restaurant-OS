@@ -32,6 +32,7 @@ export async function getUsers() {
         username: true,
         roles: true,
         createdAt: true,
+        hourlyRate: true,
         // Exclude password from the API response for security
       }
     });
@@ -48,6 +49,7 @@ export async function createUser(data: {
   username: string;
   password: string;
   roles: Role[];
+  hourlyRate?: number;
 }) {
   const auth = await requireRole('ADMIN');
   if (!auth.ok) return { success: false, error: auth.error };
@@ -66,6 +68,7 @@ export async function createUser(data: {
         username: data.username,
         password: await PasswordHasher.hash(data.password),
         roles: data.roles,
+        hourlyRate: Number.isFinite(data.hourlyRate) && (data.hourlyRate as number) >= 0 ? data.hourlyRate : 0,
       }
     });
     
@@ -75,6 +78,25 @@ export async function createUser(data: {
   } catch (error) {
     console.error('Error creating user:', error);
     return { success: false, error: 'Failed to create user' };
+  }
+}
+
+/** به‌روزرسانی نرخ دستمزد ساعتی ثابت یک کاربر، مبنای محاسبه حقوق در ماژول شیفت‌بندی. */
+export async function updateUserHourlyRate(id: string, hourlyRate: number) {
+  const auth = await requireRole('ADMIN');
+  if (!auth.ok) return { success: false, error: auth.error };
+
+  if (!Number.isFinite(hourlyRate) || hourlyRate < 0) {
+    return { success: false, error: 'نرخ ساعتی نامعتبر است' };
+  }
+
+  try {
+    const user = await prisma.user.update({ where: { id }, data: { hourlyRate } });
+    const { password, ...safeUser } = user;
+    return { success: true, user: safeUser };
+  } catch (error) {
+    console.error('Error updating user hourly rate:', error);
+    return { success: false, error: 'خطا در به‌روزرسانی نرخ ساعتی' };
   }
 }
 

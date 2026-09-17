@@ -14,6 +14,16 @@ model User {
   password  String
   roles     Role[]   @default([CASHIER])
   createdAt DateTime @default(now())
+
+  // --- Phase 4: staff & shift management ---
+  // نرخ دستمزد ساعتی ثابت؛ مبنای محاسبه حقوق از روی ساعات ثبت‌شده حضور و غیاب.
+  hourlyRate Float @default(0)
+
+  shiftAssignments      ShiftAssignment[]
+  staffRequests         StaffRequest[]    @relation("StaffRequestUser")
+  reviewedStaffRequests StaffRequest[]    @relation("StaffRequestReviewer")
+  targetedStaffRequests StaffRequest[]    @relation("StaffRequestTargetUser")
+  payrollPayments       PayrollPayment[]
 }
 
 enum Role {
@@ -25,16 +35,16 @@ enum Role {
 }
 
 model MenuItem {
-  id          String      @id @default(cuid())
+  id          String       @id @default(cuid())
   title       String
   category    String
   subCategory String?
   price       Float
   imageUrl    String?
-  isAvailable Boolean     @default(true)
+  isAvailable Boolean      @default(true)
   ingredients String?
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @default(now()) @updatedAt
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @default(now()) @updatedAt
   orderItems  OrderItem[]
   recipeItems RecipeItem[]
 }
@@ -89,25 +99,25 @@ enum DeliveryStatus {
 }
 
 model OrderItem {
-  id          String   @id @default(uuid())
+  id          String @id @default(uuid())
   orderId     String
   menuItemId  String
   quantity    Int
   priceAtTime Float
-  
-  order       Order    @relation(fields: [orderId], references: [id])
-  menuItem    MenuItem @relation(fields: [menuItemId], references: [id])
+
+  order    Order    @relation(fields: [orderId], references: [id])
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id])
 }
 
 model InventoryItem {
-  id            String   @id @default(uuid())
+  id            String       @id @default(uuid())
   name          String
   category      String
   unit          String
-  currentStock  Float    @default(0)
-  minStockLevel Float    @default(0)
-  costPerUnit   Float    @default(0)
-  lastRestocked DateTime @default(now())
+  currentStock  Float        @default(0)
+  minStockLevel Float        @default(0)
+  costPerUnit   Float        @default(0)
+  lastRestocked DateTime     @default(now())
   recipeItems   RecipeItem[]
 
   // --- Phase 3: purchasing / supplier management ---
@@ -115,13 +125,13 @@ model InventoryItem {
 }
 
 model RecipeItem {
-  id              String        @id @default(uuid())
+  id              String @id @default(uuid())
   menuItemId      String
   inventoryItemId String
   quantity        Float
 
-  menuItem        MenuItem      @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
-  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  menuItem      MenuItem      @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
 
   @@unique([menuItemId, inventoryItemId])
 }
@@ -211,20 +221,20 @@ enum LoyaltyTransactionType {
 }
 
 model RestaurantSettings {
-  id             String   @id @default("default")
-  taxPercentage  Float    @default(10)
-  packagingCost  Float    @default(5000)
-  restaurantName String   @default("رستوران نمونه سیستم‌عامل")
-  contactNumber  String   @default("")
-  footerMessage  String   @default("")
+  id             String @id @default("default")
+  taxPercentage  Float  @default(10)
+  packagingCost  Float  @default(5000)
+  restaurantName String @default("رستوران نمونه سیستم‌عامل")
+  contactNumber  String @default("")
+  footerMessage  String @default("")
 
   // سامانه مودیان (از طریق معتمد مالیاتی / TSP)
-  modianEnabled    Boolean @default(false)
-  economicCode     String  @default("")
-  nationalId       String  @default("")
-  tspProviderName  String  @default("")
-  tspApiBaseUrl    String  @default("")
-  tspApiKey        String  @default("")
+  modianEnabled   Boolean @default(false)
+  economicCode    String  @default("")
+  nationalId      String  @default("")
+  tspProviderName String  @default("")
+  tspApiBaseUrl   String  @default("")
+  tspApiKey       String  @default("")
 
   // --- Phase 2: loyalty points club ---
   // Points earned per 10,000 toman spent, and the toman value of 1 point when redeemed.
@@ -234,7 +244,7 @@ model RestaurantSettings {
   // --- Phase 2: delivery ---
   defaultDeliveryFee Float @default(0)
 
-  updatedAt      DateTime @updatedAt
+  updatedAt DateTime @updatedAt
 }
 
 model Table {
@@ -326,18 +336,18 @@ enum TransactionType {
 }
 
 model Printer {
-  id             String      @id @default(uuid())
+  id             String                @id @default(uuid())
   name           String
   type           PrinterType
   connectionType PrinterConnectionType @default(NETWORK)
-  
-  ipAddress      String?
-  port           Int?        @default(9100)
-  
-  path           String?
 
-  isActive       Boolean     @default(true)
-  createdAt      DateTime    @default(now())
+  ipAddress String?
+  port      Int?    @default(9100)
+
+  path String?
+
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
 }
 
 enum PrinterType {
@@ -350,7 +360,6 @@ enum PrinterConnectionType {
   USB
   BLUETOOTH
 }
-
 
 // =====================================================================
 // Phase 3: Purchasing & Supplier Management
@@ -426,4 +435,117 @@ model SupplierPayment {
   purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
 
   @@index([supplierId])
+}
+
+// =====================================================================
+// Phase 4: Staff & Shift Management
+// =====================================================================
+
+enum ShiftStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+}
+
+model Shift {
+  id        String      @id @default(uuid())
+  date      DateTime
+  startTime DateTime
+  endTime   DateTime
+  role      String      @default("")
+  notes     String      @default("")
+  status    ShiftStatus @default(SCHEDULED)
+  createdAt DateTime    @default(now())
+
+  assignments ShiftAssignment[]
+
+  @@index([date])
+}
+
+model ShiftAssignment {
+  id        String   @id @default(uuid())
+  shiftId   String
+  userId    String
+  createdAt DateTime @default(now())
+
+  shift      Shift       @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  user       User        @relation(fields: [userId], references: [id])
+  attendance Attendance?
+
+  swapRequestsAsSource StaffRequest[] @relation("SwapSourceAssignment")
+
+  @@unique([shiftId, userId])
+  @@index([userId])
+}
+
+model Attendance {
+  id                String    @id @default(uuid())
+  shiftAssignmentId String    @unique
+  clockIn           DateTime?
+  clockOut          DateTime?
+  createdAt         DateTime  @default(now())
+
+  shiftAssignment ShiftAssignment @relation(fields: [shiftAssignmentId], references: [id], onDelete: Cascade)
+
+  // وقتی این حضور در یک اجرای حقوق‌دهی لحاظ شود، برای جلوگیری از پرداخت دوباره ثبت می‌شود.
+  payrollPaymentId String?
+  payrollPayment   PayrollPayment? @relation(fields: [payrollPaymentId], references: [id])
+
+  @@index([payrollPaymentId])
+}
+
+enum StaffRequestType {
+  LEAVE
+  SHIFT_SWAP
+}
+
+enum StaffRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model StaffRequest {
+  id           String             @id @default(uuid())
+  type         StaffRequestType
+  userId       String
+  status       StaffRequestStatus @default(PENDING)
+  reason       String             @default("")
+  createdAt    DateTime           @default(now())
+  reviewedAt   DateTime?
+  reviewedById String?
+
+  // برای درخواست مرخصی (LEAVE)
+  startDate DateTime?
+  endDate   DateTime?
+
+  // برای درخواست جابجایی شیفت (SHIFT_SWAP): شیفت مبدأ متعلق به userId
+  // و همکاری که قرار است آن را عهده‌دار شود.
+  sourceAssignmentId String?
+  targetUserId       String?
+
+  user             User             @relation("StaffRequestUser", fields: [userId], references: [id])
+  reviewedBy       User?            @relation("StaffRequestReviewer", fields: [reviewedById], references: [id])
+  sourceAssignment ShiftAssignment? @relation("SwapSourceAssignment", fields: [sourceAssignmentId], references: [id])
+  targetUser       User?            @relation("StaffRequestTargetUser", fields: [targetUserId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+}
+
+model PayrollPayment {
+  id          String   @id @default(uuid())
+  userId      String
+  periodStart DateTime
+  periodEnd   DateTime
+  totalHours  Float
+  hourlyRate  Float
+  totalAmount Float
+  createdAt   DateTime @default(now())
+
+  user        User         @relation(fields: [userId], references: [id])
+  attendances Attendance[]
+
+  @@index([userId])
 }

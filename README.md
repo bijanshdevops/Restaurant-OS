@@ -157,6 +157,19 @@ Covered end-to-end by `tests/procurement.test.ts` (low-stock detection, PO creat
 
 ---
 
+## Staff & Shift Management (Phase 4)
+
+Shift scheduling, attendance, staff requests, and payroll, at `/dashboard/staff` (every logged-in user, for the self-service tabs; ADMIN for shift/request management; ADMIN or ACCOUNTANT for payroll):
+
+- **Shifts & assignment** — ADMIN defines shifts (date, start/end time, optional role label) and assigns staff to them. A shift can only be cancelled, and an assignment can only be removed, while no attendance has been clocked against it yet — once someone has actually shown up, the record is kept.
+- **Attendance (clock-in/clock-out)** — any staff member clocks in/out on their own shift assignments from `/dashboard/staff`; the action verifies the assignment belongs to the caller, and rejects a second clock-in or clock-out without the matching prior step.
+- **Leave & shift-swap requests** — staff submit a `LEAVE` request (date range) or a `SHIFT_SWAP` request (hand a not-yet-worked shift assignment to a named colleague); ADMIN reviews and approves/rejects. Approving a `LEAVE` request frees any of that user's shift assignments falling in the date range that have no attendance yet, so ADMIN can reassign them. Approving a `SHIFT_SWAP` transfers the assignment's ownership to the target colleague — rejected upfront (even before ADMIN reviews it) if that colleague is already assigned to the same shift, or if attendance has already started on the source assignment.
+- **Payroll (fixed hourly rate)** — each `User` has an `hourlyRate` (editable by ADMIN from the payroll tab). `getPayrollPreview`/`runPayroll` sum a user's unpaid attendance hours (clock-in/clock-out pairs not yet attached to a prior payroll run) over a date range, multiply by their hourly rate, and — only on `runPayroll` — create a `PayrollPayment` record, link the covered `Attendance` rows to it (so they can never be paid twice), and book the amount as an accounting `EXPENSE` transaction. Nothing is booked at preview time.
+
+Covered end-to-end by `tests/staffSchedule.test.ts` (role gating on shift/request management, assignment and duplicate-assignment rejection, cross-user clock-in protection, double clock-in/out rejection, blocking removal of an attended assignment, leave approval freeing an unattended shift, shift-swap approval transferring ownership and rejecting a same-shift conflict, self-cancellation of a pending request, and the full payroll preview → run → double-run-rejected → history cycle including the accounting EXPENSE booking).
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, review process, and branching model.

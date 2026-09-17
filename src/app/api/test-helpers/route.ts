@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { loginUser, logoutUser, createUser } from '@/app/actions/user';
+import { loginUser, logoutUser, createUser, updateUserHourlyRate } from '@/app/actions/user';
 import { getMenuItems, createMenuItem, getPublicMenuItems } from '@/app/actions/menu';
 import {
   createOrder,
@@ -43,6 +43,25 @@ import {
   getLowStockItems,
   getItemPriceHistory,
 } from '@/app/actions/purchaseOrder';
+import {
+  getShifts,
+  createShift,
+  cancelShift,
+  assignStaffToShift,
+  unassignStaffFromShift,
+  getMyShifts,
+  clockIn,
+  clockOut,
+  getStaffDirectory,
+  createStaffRequest,
+  getMyStaffRequests,
+  cancelMyStaffRequest,
+  getStaffRequests,
+  reviewStaffRequest,
+  getPayrollPreview,
+  runPayroll,
+  getPayrollHistory,
+} from '@/app/actions/staffSchedule';
 
 /**
  * دروازه‌ی کمکی مخصوص تست‌های خودکار (Vitest / CI).
@@ -108,6 +127,24 @@ const actions: Record<string, (...args: any[]) => Promise<any>> = {
   receivePurchaseOrderItems,
   getLowStockItems,
   getItemPriceHistory,
+  updateUserHourlyRate,
+  getShifts,
+  createShift,
+  cancelShift,
+  assignStaffToShift,
+  unassignStaffFromShift,
+  getMyShifts,
+  clockIn,
+  clockOut,
+  getStaffDirectory,
+  createStaffRequest,
+  getMyStaffRequests,
+  cancelMyStaffRequest,
+  getStaffRequests,
+  reviewStaffRequest,
+  getPayrollPreview,
+  runPayroll,
+  getPayrollHistory,
 };
 
 function guard() {

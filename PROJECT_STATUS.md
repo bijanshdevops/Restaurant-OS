@@ -113,3 +113,4 @@ Before Phase 1 implementation begins, the following must be Approved:
 | 2026-07-08 | Architecture Board | Phase 0 complete — ~120 files created |
 | 2026-07-20 | Architecture Board | Phase 1 complete — Core Operations slice built |
 | 2026-07-20 | Architecture Board | Phase 2 complete — Platform Services built, Phase 3 initiated |
+| 2026-09-17 | Engineering | Delivered the product "Phase 2" feature set (online ordering/delivery + real customer loyalty club): customer OTP accounts, public ordering flow, ZarinPal payment integration, courier/delivery management, and a shared points/tier loyalty engine (POS + online). See [CHANGELOG](CHANGELOG.md) and the "Online Ordering, Delivery & Loyalty Club" section in [README.md](README.md). Note: this is a feature-delivery milestone tracked separately from the architecture-governance phases above. |

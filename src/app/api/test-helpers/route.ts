@@ -1,10 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { loginUser, logoutUser, createUser } from '@/app/actions/user';
-import { getMenuItems, createMenuItem } from '@/app/actions/menu';
-import { createOrder, getActiveOrders, updateOrderStatus } from '@/app/actions/order';
+import { getMenuItems, createMenuItem, getPublicMenuItems } from '@/app/actions/menu';
+import {
+  createOrder,
+  getActiveOrders,
+  updateOrderStatus,
+  createOnlineOrder,
+  getMyOnlineOrder,
+  finalizeOnlineOrderAfterPayment,
+  markOnlineOrderPaymentFailed,
+} from '@/app/actions/order';
 import { getTables, createTable, createReservation, getReservations, updateReservationStatus } from '@/app/actions/reservation';
-import { getSettings, updateSettings, updateModianSettings } from '@/app/actions/settings';
+import { getSettings, updateSettings, updateModianSettings, getPublicOrderSettings } from '@/app/actions/settings';
 import { getUsers } from '@/app/actions/user';
+import { getCustomers } from '@/app/actions/crm';
+import { requestOtp, verifyOtp, logoutCustomer, getCustomerProfile } from '@/app/actions/customerAuth';
+import {
+  getCouriers,
+  createCourier,
+  setCourierActive,
+  getDeliveryBoard,
+  assignCourier,
+  advanceDeliveryStatus,
+  markDeliveryFailed,
+} from '@/app/actions/delivery';
 
 /**
  * دروازه‌ی کمکی مخصوص تست‌های خودکار (Vitest / CI).
@@ -35,6 +54,24 @@ const actions: Record<string, (...args: any[]) => Promise<any>> = {
   getSettings,
   updateSettings,
   updateModianSettings,
+  getPublicOrderSettings,
+  getPublicMenuItems,
+  requestOtp,
+  verifyOtp,
+  logoutCustomer,
+  getCustomerProfile,
+  createOnlineOrder,
+  getMyOnlineOrder,
+  finalizeOnlineOrderAfterPayment,
+  markOnlineOrderPaymentFailed,
+  getCouriers,
+  createCourier,
+  setCourierActive,
+  getDeliveryBoard,
+  assignCourier,
+  advanceDeliveryStatus,
+  markDeliveryFailed,
+  getCustomers,
 };
 
 function guard() {

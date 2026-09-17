@@ -33,6 +33,35 @@ export async function getSettings() {
   }
 }
 
+/**
+ * Public, staff-auth-free settings needed by the customer-facing online
+ * ordering flow to compute a live order summary (tax/packaging/delivery/
+ * loyalty rates). Deliberately a narrow allowlist — never reuses getSettings'
+ * full object, which includes internal/sensitive fields.
+ */
+export async function getPublicOrderSettings() {
+  try {
+    let settings = await prisma.restaurantSettings.findUnique({ where: { id: SETTINGS_ID } });
+    if (!settings) {
+      settings = await prisma.restaurantSettings.create({ data: { id: SETTINGS_ID } });
+    }
+    return {
+      success: true,
+      settings: {
+        taxPercentage: settings.taxPercentage,
+        packagingCost: settings.packagingCost,
+        defaultDeliveryFee: settings.defaultDeliveryFee,
+        loyaltyPointValueToman: settings.loyaltyPointValueToman,
+        loyaltyPointsPerTenThousand: settings.loyaltyPointsPerTenThousand,
+        restaurantName: settings.restaurantName,
+      },
+    };
+  } catch (error) {
+    console.error('Error fetching public order settings:', error);
+    return { success: false, error: 'خطا در دریافت تنظیمات' };
+  }
+}
+
 export async function updateSettings(data: {
   taxPercentage: number;
   packagingCost: number;

@@ -10,6 +10,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 ## [Unreleased]
 
 ### Added
+- Online ordering & delivery: customer accounts with SMS OTP login, public menu/cart, checkout with server-verified pricing, ZarinPal payment integration (sandbox by default), order tracking, and a staff delivery dashboard with full courier lifecycle management (assign → picked up → on the way → delivered).
+- Customer loyalty club: points earned per purchase and redeemable for a discount, with an automatic lifetime-spend tier (NORMAL/BRONZE/SILVER/GOLD/VIP) shared between the POS and online ordering flows.
+- `tests/onlineOrdering.test.ts` and `tests/loyalty.test.ts` covering the new flows end-to-end.
+- Production-build dev fallback (`npm run dev:winfix`) documented for the Node 24/Windows `next dev` Tailwind bug.
+
+### Changed
+- POS orders (`createOrder`) with a customer attached now also earn loyalty points and can trigger a tier upgrade — previously they only updated `totalOrders`/`totalSpent`.
+
+### Added (Phase 0 foundation)
 - Initial Phase 0 repository structure
 - Complete documentation governance foundation
 - Architecture Decision Records (ADR-0001 through ADR-0005)

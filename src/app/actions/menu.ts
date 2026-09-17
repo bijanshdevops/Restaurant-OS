@@ -18,6 +18,32 @@ export async function getMenuItems() {
   }
 }
 
+/**
+ * Menu listing for the public/customer-facing online ordering pages. No
+ * staff session required, and deliberately excludes cost/ingredient fields
+ * (`ingredients`) that are only meaningful internally.
+ */
+export async function getPublicMenuItems() {
+  try {
+    const items = await prisma.menuItem.findMany({
+      where: { isAvailable: true },
+      orderBy: { title: 'asc' },
+      select: {
+        id: true,
+        title: true,
+        category: true,
+        subCategory: true,
+        price: true,
+        imageUrl: true,
+      },
+    });
+    return items;
+  } catch (error) {
+    console.error('Error fetching public menu items:', error);
+    return [];
+  }
+}
+
 export async function createMenuItem(data: {
   title: string;
   price: number;

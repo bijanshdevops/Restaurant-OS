@@ -51,13 +51,41 @@ model Order {
   customer    Customer?   @relation(fields: [customerId], references: [id])
   table       Table?      @relation(fields: [tableId], references: [id])
   taxInvoice  TaxInvoice?
+
+  // --- Phase 2: online ordering / delivery ---
+  channel         OrderChannel    @default(DINE_IN)
+  deliveryAddress String?
+  deliveryFee     Float           @default(0)
+  pointsRedeemed  Int             @default(0)
+  pointsEarned    Int             @default(0)
+  deliveryStatus  DeliveryStatus?
+  courierId       String?
+  courier         Courier?        @relation(fields: [courierId], references: [id])
+  payment         Payment?
 }
 
 enum OrderStatus {
+  AWAITING_PAYMENT
   PENDING
   PREPARING
   READY
   COMPLETED
+  CANCELLED
+}
+
+enum OrderChannel {
+  DINE_IN
+  TAKEAWAY
+  ONLINE_DELIVERY
+}
+
+enum DeliveryStatus {
+  PENDING_ASSIGNMENT
+  ASSIGNED
+  PICKED_UP
+  ON_THE_WAY
+  DELIVERED
+  FAILED
 }
 
 model OrderItem {
@@ -105,6 +133,78 @@ model Customer {
   lastVisit    DateTime      @default(now()) @updatedAt
   orders       Order[]
   reservations Reservation[]
+
+  // --- Phase 2: loyalty points club ---
+  pointsBalance       Int                  @default(0)
+  loyaltyTransactions LoyaltyTransaction[]
+}
+
+model OtpCode {
+  id         String    @id @default(uuid())
+  phone      String
+  codeHash   String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  attempts   Int       @default(0)
+  createdAt  DateTime  @default(now())
+
+  @@index([phone])
+}
+
+model Courier {
+  id        String   @id @default(uuid())
+  name      String
+  phone     String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  orders    Order[]
+}
+
+model Payment {
+  id           String          @id @default(uuid())
+  orderId      String          @unique
+  provider     PaymentProvider
+  status       PaymentStatus   @default(PENDING)
+  amount       Float
+  authority    String?
+  refId        String?
+  errorMessage String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  paidAt       DateTime?
+
+  order Order @relation(fields: [orderId], references: [id])
+}
+
+enum PaymentProvider {
+  CASH
+  ZARINPAL
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+}
+
+model LoyaltyTransaction {
+  id          String                 @id @default(uuid())
+  customerId  String
+  type        LoyaltyTransactionType
+  points      Int
+  orderId     String?
+  description String
+  createdAt   DateTime               @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@index([customerId])
+}
+
+enum LoyaltyTransactionType {
+  EARNED
+  REDEEMED
+  ADJUSTED
 }
 
 model RestaurantSettings {
@@ -122,6 +222,14 @@ model RestaurantSettings {
   tspProviderName  String  @default("")
   tspApiBaseUrl    String  @default("")
   tspApiKey        String  @default("")
+
+  // --- Phase 2: loyalty points club ---
+  // Points earned per 10,000 toman spent, and the toman value of 1 point when redeemed.
+  loyaltyPointsPerTenThousand Int   @default(1)
+  loyaltyPointValueToman      Float @default(1000)
+
+  // --- Phase 2: delivery ---
+  defaultDeliveryFee Float @default(0)
 
   updatedAt      DateTime @updatedAt
 }

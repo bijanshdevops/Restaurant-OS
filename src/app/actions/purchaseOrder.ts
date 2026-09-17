@@ -2,7 +2,7 @@
 
 import { prisma } from '@/lib/prisma';
 import { randomBytes } from 'crypto';
-import { requireRole } from '@/lib/auth';
+import { requireRole, resolveBranchFilter, isBranchExempt } from '@/lib/auth';
 
 const PROCUREMENT_ROLES = ['ADMIN', 'INVENTORY_MANAGER', 'ACCOUNTANT'] as const;
 
@@ -12,15 +12,18 @@ interface PurchaseOrderLine {
   unitCost: number;
 }
 
-export async function getPurchaseOrders() {
+export async function getPurchaseOrders(branchId?: string) {
   const auth = await requireRole(...PROCUREMENT_ROLES);
   if (!auth.ok) return { success: false, error: auth.error };
 
   try {
+    const effectiveBranchId = resolveBranchFilter(auth.user, branchId);
     const orders = await prisma.purchaseOrder.findMany({
+      where: effectiveBranchId ? { branchId: effectiveBranchId } : undefined,
       orderBy: { createdAt: 'desc' },
       include: {
         supplier: true,
+        branch: { select: { id: true, name: true } },
         items: { include: { inventoryItem: true } },
       },
     });
@@ -54,6 +57,11 @@ export async function createPurchaseOrder(data: {
   try {
     const supplier = await prisma.supplier.findUnique({ where: { id: data.supplierId } });
     if (!supplier) return { success: false, error: 'تأمین‌کننده یافت نشد' };
+    // سفارش خرید همیشه به همان شعبه‌ی تأمین‌کننده‌اش تعلق دارد؛ پرسنل غیر
+    // مدیر فقط می‌توانند از تأمین‌کننده‌های ثبت‌شده در شعبه‌ی خودشان سفارش بدهند.
+    if (!isBranchExempt(auth.user) && supplier.branchId !== auth.user.branchId) {
+      return { success: false, error: 'دسترسی غیرمجاز' };
+    }
 
     const poNumber = `PO-${randomBytes(2).toString('hex').toUpperCase()}`;
     const totalAmount = data.items.reduce((sum, l) => sum + l.quantity * l.unitCost, 0);
@@ -62,6 +70,7 @@ export async function createPurchaseOrder(data: {
       data: {
         poNumber,
         supplierId: data.supplierId,
+        branchId: supplier.branchId,
         notes: data.notes?.trim() || '',
         totalAmount,
         items: {
@@ -72,7 +81,11 @@ export async function createPurchaseOrder(data: {
           })),
         },
       },
-      include: { items: { include: { inventoryItem: true } }, supplier: true },
+      include: {
+        items: { include: { inventoryItem: true } },
+        supplier: true,
+        branch: { select: { id: true, name: true } },
+      },
     });
 
     return { success: true, order };
@@ -90,6 +103,9 @@ export async function markPurchaseOrderOrdered(id: string) {
   try {
     const existing = await prisma.purchaseOrder.findUnique({ where: { id } });
     if (!existing) return { success: false, error: 'سفارش خرید یافت نشد' };
+    if (!isBranchExempt(auth.user) && existing.branchId !== auth.user.branchId) {
+      return { success: false, error: 'دسترسی غیرمجاز' };
+    }
     if (existing.status !== 'DRAFT') {
       return { success: false, error: 'فقط سفارش‌های پیش‌نویس قابل ثبت هستند' };
     }
@@ -113,6 +129,9 @@ export async function cancelPurchaseOrder(id: string) {
   try {
     const existing = await prisma.purchaseOrder.findUnique({ where: { id }, include: { items: true } });
     if (!existing) return { success: false, error: 'سفارش خرید یافت نشد' };
+    if (!isBranchExempt(auth.user) && existing.branchId !== auth.user.branchId) {
+      return { success: false, error: 'دسترسی غیرمجاز' };
+    }
     if (existing.status === 'CANCELLED' || existing.status === 'RECEIVED') {
       return { success: false, error: 'این سفارش دیگر قابل لغو نیست' };
     }
@@ -140,7 +159,9 @@ interface ReceiptLine {
  * Supports partial receiving (a batch can cover only some of the ordered
  * quantity, and this can be called multiple times as more of the order
  * arrives). Over-receiving beyond what was ordered is clamped, never
- * allowed to overshoot.
+ * allowed to overshoot. Stock lands in the PO's own branch's
+ * BranchInventoryStock row (upserted, since this may be that branch's
+ * first-ever receipt of this catalog item).
  */
 export async function receivePurchaseOrderItems(purchaseOrderId: string, receipts: ReceiptLine[]) {
   const auth = await requireRole(...PROCUREMENT_ROLES);
@@ -157,6 +178,9 @@ export async function receivePurchaseOrderItems(purchaseOrderId: string, receipt
         include: { items: true },
       });
       if (!po) throw new Error('سفارش خرید یافت نشد');
+      if (!isBranchExempt(auth.user) && po.branchId !== auth.user.branchId) {
+        throw new Error('دسترسی غیرمجاز');
+      }
       if (po.status === 'DRAFT' || po.status === 'CANCELLED' || po.status === 'RECEIVED') {
         throw new Error('این سفارش در وضعیت قابل دریافت کالا نیست');
       }
@@ -181,9 +205,21 @@ export async function receivePurchaseOrderItems(purchaseOrderId: string, receipt
           data: { quantityReceived: { increment: acceptedQty } },
         });
 
-        await tx.inventoryItem.update({
-          where: { id: item.inventoryItemId },
-          data: {
+        await tx.branchInventoryStock.upsert({
+          where: {
+            branchId_inventoryItemId: {
+              branchId: po.branchId,
+              inventoryItemId: item.inventoryItemId,
+            },
+          },
+          create: {
+            branchId: po.branchId,
+            inventoryItemId: item.inventoryItemId,
+            currentStock: acceptedQty,
+            costPerUnit: item.unitCost,
+            lastRestocked: new Date(),
+          },
+          update: {
             currentStock: { increment: acceptedQty },
             costPerUnit: item.unitCost,
             lastRestocked: new Date(),
@@ -197,6 +233,7 @@ export async function receivePurchaseOrderItems(purchaseOrderId: string, receipt
             type: 'EXPENSE',
             description: `خرید کالا از تأمین‌کننده — سفارش ${po.poNumber}`,
             amount: batchCost,
+            branchId: po.branchId,
           },
         });
         await tx.supplier.update({
@@ -229,22 +266,37 @@ export async function receivePurchaseOrderItems(purchaseOrderId: string, receipt
 
 /**
  * Items at or below their configured reorder point (minStockLevel), each
- * with a suggested reorder quantity. The suggestion is a simple heuristic —
- * top back up to twice the reorder point — since there's no separate "par
- * level" field yet; staff can freely adjust the quantity when building the
- * actual purchase order.
+ * with a suggested reorder quantity. Reads from the per-branch stock table
+ * now, so an ADMIN calling without branchId sees every branch's low-stock
+ * items at once (each tagged with its own branch), while everyone else
+ * only ever sees their own branch's.
  */
-export async function getLowStockItems() {
+export async function getLowStockItems(branchId?: string) {
   const auth = await requireRole(...PROCUREMENT_ROLES);
   if (!auth.ok) return { success: false, error: auth.error };
 
   try {
-    const items = await prisma.inventoryItem.findMany({ orderBy: { name: 'asc' } });
-    const lowStock = items
-      .filter((i) => i.currentStock <= i.minStockLevel)
-      .map((i) => ({
-        ...i,
-        suggestedQuantity: Math.max(i.minStockLevel * 2 - i.currentStock, i.minStockLevel, 1),
+    const effectiveBranchId = resolveBranchFilter(auth.user, branchId);
+    const stocks = await prisma.branchInventoryStock.findMany({
+      where: effectiveBranchId ? { branchId: effectiveBranchId } : undefined,
+      include: { inventoryItem: true, branch: { select: { id: true, name: true } } },
+      orderBy: { inventoryItem: { name: 'asc' } },
+    });
+
+    const lowStock = stocks
+      .filter((s) => s.currentStock <= s.minStockLevel)
+      .map((s) => ({
+        id: s.inventoryItem.id,
+        name: s.inventoryItem.name,
+        category: s.inventoryItem.category,
+        unit: s.inventoryItem.unit,
+        currentStock: s.currentStock,
+        minStockLevel: s.minStockLevel,
+        costPerUnit: s.costPerUnit,
+        branchId: s.branchId,
+        branch: s.branch,
+        stockId: s.id,
+        suggestedQuantity: Math.max(s.minStockLevel * 2 - s.currentStock, s.minStockLevel, 1),
       }));
     return { success: true, items: lowStock };
   } catch (error) {
@@ -253,14 +305,18 @@ export async function getLowStockItems() {
   }
 }
 
-/** Purchase-price history for one inventory item, across all suppliers/orders, newest first. */
-export async function getItemPriceHistory(inventoryItemId: string) {
+/** Purchase-price history for one inventory item, across all suppliers/orders, newest first. Scoped to the caller's own branch's purchase orders (ADMIN sees all). */
+export async function getItemPriceHistory(inventoryItemId: string, branchId?: string) {
   const auth = await requireRole(...PROCUREMENT_ROLES);
   if (!auth.ok) return { success: false, error: auth.error };
 
   try {
+    const effectiveBranchId = resolveBranchFilter(auth.user, branchId);
     const lines = await prisma.purchaseOrderItem.findMany({
-      where: { inventoryItemId },
+      where: {
+        inventoryItemId,
+        purchaseOrder: effectiveBranchId ? { branchId: effectiveBranchId } : undefined,
+      },
       include: { purchaseOrder: { include: { supplier: true } } },
       orderBy: { purchaseOrder: { createdAt: 'desc' } },
     });

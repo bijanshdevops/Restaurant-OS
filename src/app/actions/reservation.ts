@@ -1,19 +1,22 @@
 "use server";
 
 import { prisma } from '@/lib/prisma';
-import { requireRole } from '@/lib/auth';
+import { requireRole, resolveBranchFilter, resolveBranchForCreate, isBranchExempt } from '@/lib/auth';
 import { ReservationStatus, TableStatus } from '@prisma/client';
 
 // ---------- Tables ----------
 
-export async function getTables() {
+export async function getTables(branchId?: string) {
   const auth = await requireRole('ADMIN', 'CASHIER');
   if (!auth.ok) return { success: false, error: auth.error };
 
   try {
+    const effectiveBranchId = resolveBranchFilter(auth.user, branchId);
     const tables = await prisma.table.findMany({
-      orderBy: { number: 'asc' },
+      where: effectiveBranchId ? { branchId: effectiveBranchId } : undefined,
+      orderBy: [{ branchId: 'asc' }, { number: 'asc' }],
       include: {
+        branch: { select: { id: true, name: true } },
         reservations: {
           where: { status: { in: ['PENDING', 'CONFIRMED', 'SEATED'] } },
           orderBy: { reservationTime: 'asc' },
@@ -28,7 +31,7 @@ export async function getTables() {
   }
 }
 
-export async function createTable(number: number, capacity: number) {
+export async function createTable(number: number, capacity: number, branchId?: string) {
   const auth = await requireRole('ADMIN');
   if (!auth.ok) return { success: false, error: auth.error };
 
@@ -39,11 +42,12 @@ export async function createTable(number: number, capacity: number) {
     if (!Number.isFinite(capacity) || capacity <= 0) {
       return { success: false, error: 'ظرفیت میز نامعتبر است' };
     }
-    const table = await prisma.table.create({ data: { number, capacity } });
+    const effectiveBranchId = resolveBranchForCreate(auth.user, branchId);
+    const table = await prisma.table.create({ data: { number, capacity, branchId: effectiveBranchId } });
     return { success: true, table };
   } catch (error: any) {
     if (error?.code === 'P2002') {
-      return { success: false, error: 'میزی با این شماره از قبل وجود دارد' };
+      return { success: false, error: 'میزی با این شماره در این شعبه از قبل وجود دارد' };
     }
     console.error('Error creating table:', error);
     return { success: false, error: 'خطا در ایجاد میز' };
@@ -55,6 +59,12 @@ export async function updateTableStatus(tableId: string, status: TableStatus) {
   if (!auth.ok) return { success: false, error: auth.error };
 
   try {
+    const existing = await prisma.table.findUnique({ where: { id: tableId } });
+    if (!existing) return { success: false, error: 'میز یافت نشد' };
+    if (!isBranchExempt(auth.user) && existing.branchId !== auth.user.branchId) {
+      return { success: false, error: 'دسترسی غیرمجاز' };
+    }
+
     const table = await prisma.table.update({ where: { id: tableId }, data: { status } });
     return { success: true, table };
   } catch (error) {
@@ -68,12 +78,14 @@ export async function updateTableStatus(tableId: string, status: TableStatus) {
 const ACTIVE_STATUSES: ReservationStatus[] = ['PENDING', 'CONFIRMED', 'SEATED'];
 const CONFLICT_WINDOW_MINUTES = 90;
 
-export async function getReservations(from?: Date, to?: Date) {
+export async function getReservations(from?: Date, to?: Date, branchId?: string) {
   const auth = await requireRole('ADMIN', 'CASHIER');
   if (!auth.ok) return { success: false, error: auth.error };
 
   try {
+    const effectiveBranchId = resolveBranchFilter(auth.user, branchId);
     const where: any = {};
+    if (effectiveBranchId) where.branchId = effectiveBranchId;
     if (from || to) {
       where.reservationTime = {};
       if (from) where.reservationTime.gte = from;
@@ -81,7 +93,7 @@ export async function getReservations(from?: Date, to?: Date) {
     }
     const reservations = await prisma.reservation.findMany({
       where,
-      include: { table: true, customer: true },
+      include: { table: true, customer: true, branch: { select: { id: true, name: true } } },
       orderBy: { reservationTime: 'asc' },
     });
     return { success: true, reservations };
@@ -124,6 +136,11 @@ export async function createReservation(input: CreateReservationInput) {
     if (!table) {
       return { success: false, error: 'میز مورد نظر یافت نشد' };
     }
+    // رزرو همیشه در همان شعبه‌ی میز ثبت می‌شود؛ پرسنل غیر مدیر فقط می‌توانند
+    // برای میزهای شعبه‌ی خودشان رزرو بگیرند.
+    if (!isBranchExempt(auth.user) && table.branchId !== auth.user.branchId) {
+      return { success: false, error: 'دسترسی غیرمجاز' };
+    }
 
     // Prevent double-booking the same table within a ±90 minute window
     const windowStart = new Date(reservationTime.getTime() - CONFLICT_WINDOW_MINUTES * 60000);
@@ -142,6 +159,7 @@ export async function createReservation(input: CreateReservationInput) {
     const reservation = await prisma.reservation.create({
       data: {
         tableId: input.tableId,
+        branchId: table.branchId,
         guestName: input.guestName.trim(),
         guestPhone: input.guestPhone.trim(),
         partySize: input.partySize,
@@ -166,6 +184,9 @@ export async function updateReservationStatus(reservationId: string, status: Res
     const reservation = await prisma.reservation.findUnique({ where: { id: reservationId } });
     if (!reservation) {
       return { success: false, error: 'رزرو یافت نشد' };
+    }
+    if (!isBranchExempt(auth.user) && reservation.branchId !== auth.user.branchId) {
+      return { success: false, error: 'دسترسی غیرمجاز' };
     }
 
     const updated = await prisma.$transaction(async (tx) => {

@@ -3,9 +3,10 @@
 import { prisma } from '@/lib/prisma';
 import { randomBytes } from 'crypto';
 import { OrderStatus, Prisma } from '@prisma/client';
-import { requireRole } from '@/lib/auth';
+import { requireRole, resolveBranchFilter, resolveBranchForCreate, isBranchExempt } from '@/lib/auth';
 import { requireCustomer } from '@/lib/customerAuth';
 import { awardLoyaltyForOrder } from '@/lib/loyalty';
+import { getDefaultBranchId } from './branch';
 
 interface CartItem {
   menuItemId: string;
@@ -52,7 +53,7 @@ async function verifyCartItems(
   return { menuItemMap, subtotal };
 }
 
-export async function createOrder(cartItems: CartItem[], customerId?: string) {
+export async function createOrder(cartItems: CartItem[], customerId?: string, branchId?: string) {
   const auth = await requireRole('ADMIN', 'CASHIER');
   if (!auth.ok) return { success: false, error: auth.error };
 
@@ -60,6 +61,8 @@ export async function createOrder(cartItems: CartItem[], customerId?: string) {
     if (!cartItems || cartItems.length === 0) {
       return { success: false, error: 'سبد سفارش خالی است' };
     }
+
+    const effectiveBranchId = resolveBranchForCreate(auth.user, branchId);
 
     // Generate a short unique order number (e.g. ORD-8A3B)
     const orderNumber = `ORD-${randomBytes(2).toString('hex').toUpperCase()}`;
@@ -86,6 +89,7 @@ export async function createOrder(cartItems: CartItem[], customerId?: string) {
           totalAmount,
           status: 'PENDING',
           customerId: customerId || null,
+          branchId: effectiveBranchId,
         },
       });
 
@@ -99,7 +103,8 @@ export async function createOrder(cartItems: CartItem[], customerId?: string) {
         })),
       });
 
-      // 4. Deduct ingredient stock according to each item's recipe (BOM)
+      // 4. Deduct ingredient stock according to each item's recipe (BOM) —
+      // from THIS order's own branch's BranchInventoryStock.
       const stockDeductions = new Map<string, number>();
       for (const cartItem of cartItems) {
         const menuItem = menuItemMap.get(cartItem.menuItemId)!;
@@ -112,8 +117,10 @@ export async function createOrder(cartItems: CartItem[], customerId?: string) {
         }
       }
       for (const [inventoryItemId, amount] of stockDeductions) {
-        await tx.inventoryItem.update({
-          where: { id: inventoryItemId },
+        await tx.branchInventoryStock.update({
+          where: {
+            branchId_inventoryItemId: { branchId: effectiveBranchId, inventoryItemId },
+          },
           data: { currentStock: { decrement: amount } },
         });
       }
@@ -124,6 +131,7 @@ export async function createOrder(cartItems: CartItem[], customerId?: string) {
           type: 'INCOME',
           description: `درآمد از سفارش ${orderNumber}`,
           amount: totalAmount,
+          branchId: effectiveBranchId,
         },
       });
 
@@ -149,27 +157,24 @@ export async function createOrder(cartItems: CartItem[], customerId?: string) {
   }
 }
 
-export async function getActiveOrders() {
+export async function getActiveOrders(branchId?: string) {
   const auth = await requireRole('ADMIN', 'CASHIER', 'CHEF');
   if (!auth.ok) return { success: false, error: auth.error };
 
   try {
+    const effectiveBranchId = resolveBranchFilter(auth.user, branchId);
+    // سفارش‌های آنلاین (branchId=null) در تابلوی هر شعبه‌ای دیده می‌شوند —
+    // محدودیت شناخته‌شده‌ای که تا زمان افزودن انتخاب شعبه به سفارش آنلاین برقرار است.
     const activeOrders = await prisma.order.findMany({
       where: {
-        status: {
-          not: 'COMPLETED',
-        },
+        status: { not: 'COMPLETED' },
+        ...(effectiveBranchId ? { OR: [{ branchId: effectiveBranchId }, { branchId: null }] } : {}),
       },
       include: {
-        items: {
-          include: {
-            menuItem: true,
-          },
-        },
+        items: { include: { menuItem: true } },
+        branch: { select: { id: true, name: true } },
       },
-      orderBy: {
-        createdAt: 'asc',
-      },
+      orderBy: { createdAt: 'asc' },
     });
 
     return { success: true, orders: activeOrders };
@@ -184,6 +189,14 @@ export async function updateOrderStatus(orderId: string, status: OrderStatus) {
   if (!auth.ok) return { success: false, error: auth.error };
 
   try {
+    const existing = await prisma.order.findUnique({ where: { id: orderId } });
+    if (!existing) return { success: false, error: 'سفارش یافت نشد' };
+    // سفارش‌های آنلاین (branchId=null) از هر شعبه‌ای قابل پیگیری هستند؛
+    // سفارش‌های صندوق (POS) فقط توسط همان شعبه (یا ADMIN) قابل تغییرند.
+    if (!isBranchExempt(auth.user) && existing.branchId && existing.branchId !== auth.user.branchId) {
+      return { success: false, error: 'دسترسی غیرمجاز' };
+    }
+
     const updatedOrder = await prisma.order.update({
       where: { id: orderId },
       data: { status },
@@ -202,6 +215,11 @@ export async function updateOrderStatus(orderId: string, status: OrderStatus) {
  * AWAITING_PAYMENT until the ZarinPal payment is confirmed (see
  * confirmOnlineOrderPayment in payment.ts), so an abandoned/failed payment
  * never depletes stock or awards points for a sale that never happened.
+ *
+ * The online ordering UI has no branch picker yet, so this order's
+ * branchId is left null; it is fulfilled/attributed to the default branch
+ * at finalization time (see finalizeOnlineOrderAfterPayment below) — a
+ * known, documented limitation until multi-branch online ordering exists.
  */
 export async function createOnlineOrder(
   cartItems: CartItem[],
@@ -316,11 +334,19 @@ export async function getMyOnlineOrder(orderId: string) {
  * safe to call twice for the same order (e.g. a duplicated gateway
  * callback) since it only acts on orders still in AWAITING_PAYMENT.
  *
+ * Online orders carry no branchId of their own (see createOnlineOrder), so
+ * stock is deducted from the default branch's BranchInventoryStock — the
+ * one designated fulfillment point for online orders until per-branch
+ * online ordering exists. The booked INCOME transaction stays branchless
+ * too, matching Order.branchId.
+ *
  * Not itself auth-gated: it's only ever called from the payment callback
  * route after the gateway signature/verify step has already succeeded,
  * never directly from the client.
  */
 export async function finalizeOnlineOrderAfterPayment(orderId: string) {
+  const defaultBranchId = await getDefaultBranchId();
+
   return prisma.$transaction(async (tx) => {
     const order = await tx.order.findUnique({
       where: { id: orderId },
@@ -333,7 +359,8 @@ export async function finalizeOnlineOrderAfterPayment(orderId: string) {
       return order;
     }
 
-    // 1. Deduct ingredient stock according to each item's recipe (BOM)
+    // 1. Deduct ingredient stock according to each item's recipe (BOM) —
+    // from the default branch's stock (see function docstring).
     const stockDeductions = new Map<string, number>();
     for (const item of order.items) {
       for (const recipeLine of item.menuItem.recipeItems) {
@@ -345,8 +372,10 @@ export async function finalizeOnlineOrderAfterPayment(orderId: string) {
       }
     }
     for (const [inventoryItemId, amount] of stockDeductions) {
-      await tx.inventoryItem.update({
-        where: { id: inventoryItemId },
+      await tx.branchInventoryStock.update({
+        where: {
+          branchId_inventoryItemId: { branchId: defaultBranchId, inventoryItemId },
+        },
         data: { currentStock: { decrement: amount } },
       });
     }

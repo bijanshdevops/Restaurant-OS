@@ -3,28 +3,36 @@
 import { prisma } from '@/lib/prisma';
 import { Role } from '@prisma/client';
 import { PasswordHasher } from '@/shared/infrastructure/security/PasswordHasher';
-import { createSession, destroySession, requireRole } from '@/lib/auth';
+import { createSession, destroySession, requireRole, resolveBranchFilter } from '@/lib/auth';
+import { getDefaultBranchId } from './branch';
 
-export async function getUsers() {
+/** Auto-seeds an admin (useful for fresh installs), assigned to the default branch. */
+async function seedAdminIfNeeded() {
+  const usersCount = await prisma.user.count();
+  if (usersCount === 0) {
+    const branchId = await getDefaultBranchId();
+    await prisma.user.create({
+      data: {
+        name: 'مدیر سیستم',
+        username: 'admin',
+        password: await PasswordHasher.hash('123'),
+        roles: ['ADMIN'],
+        branchId,
+      }
+    });
+  }
+}
+
+export async function getUsers(branchId?: string) {
   const auth = await requireRole('ADMIN');
   if (!auth.ok) return { success: false, error: auth.error };
 
   try {
-    const usersCount = await prisma.user.count();
-    
-    // Auto-seed an admin if no users exist
-    if (usersCount === 0) {
-      await prisma.user.create({
-        data: {
-          name: 'مدیر سیستم',
-          username: 'admin',
-          password: await PasswordHasher.hash('123'),
-          roles: ['ADMIN'],
-        }
-      });
-    }
+    await seedAdminIfNeeded();
 
+    const filterBranchId = resolveBranchFilter(auth.user, branchId);
     const users = await prisma.user.findMany({
+      where: filterBranchId ? { branchId: filterBranchId } : {},
       orderBy: { createdAt: 'asc' },
       select: {
         id: true,
@@ -33,6 +41,8 @@ export async function getUsers() {
         roles: true,
         createdAt: true,
         hourlyRate: true,
+        branchId: true,
+        branch: { select: { id: true, name: true } },
         // Exclude password from the API response for security
       }
     });
@@ -50,6 +60,7 @@ export async function createUser(data: {
   password: string;
   roles: Role[];
   hourlyRate?: number;
+  branchId?: string;
 }) {
   const auth = await requireRole('ADMIN');
   if (!auth.ok) return { success: false, error: auth.error };
@@ -62,6 +73,13 @@ export async function createUser(data: {
       return { success: false, error: 'نام کاربری از قبل وجود دارد' };
     }
 
+    // ADMIN can assign a new hire to any branch; if none is picked, the
+    // new user lands on ADMIN's own branch (a sensible default, not a
+    // security boundary — ADMIN can always move them later).
+    const branchId = data.branchId || auth.user.branchId;
+    const branch = await prisma.branch.findUnique({ where: { id: branchId } });
+    if (!branch) return { success: false, error: 'شعبه‌ی انتخاب‌شده یافت نشد' };
+
     const newUser = await prisma.user.create({
       data: {
         name: data.name,
@@ -69,6 +87,7 @@ export async function createUser(data: {
         password: await PasswordHasher.hash(data.password),
         roles: data.roles,
         hourlyRate: Number.isFinite(data.hourlyRate) && (data.hourlyRate as number) >= 0 ? data.hourlyRate : 0,
+        branchId,
       }
     });
     
@@ -78,6 +97,24 @@ export async function createUser(data: {
   } catch (error) {
     console.error('Error creating user:', error);
     return { success: false, error: 'Failed to create user' };
+  }
+}
+
+/** جابه‌جایی یک پرسنل به شعبه‌ی دیگر. */
+export async function updateUserBranch(id: string, branchId: string) {
+  const auth = await requireRole('ADMIN');
+  if (!auth.ok) return { success: false, error: auth.error };
+
+  try {
+    const branch = await prisma.branch.findUnique({ where: { id: branchId } });
+    if (!branch) return { success: false, error: 'شعبه‌ی انتخاب‌شده یافت نشد' };
+
+    const user = await prisma.user.update({ where: { id }, data: { branchId } });
+    const { password, ...safeUser } = user;
+    return { success: true, user: safeUser };
+  } catch (error) {
+    console.error('Error updating user branch:', error);
+    return { success: false, error: 'خطا در جابه‌جایی شعبه‌ی پرسنل' };
   }
 }
 
@@ -125,28 +162,18 @@ export async function deleteUser(id: string) {
 
 export async function loginUser(username: string, password: string) {
   try {
-    // Auto-seed an admin if no users exist (useful for fresh installs)
-    const usersCount = await prisma.user.count();
-    if (usersCount === 0) {
-      await prisma.user.create({
-        data: {
-          name: 'مدیر سیستم',
-          username: 'admin',
-          password: await PasswordHasher.hash('123'),
-          roles: ['ADMIN'],
-        }
-      });
-    }
+    await seedAdminIfNeeded();
 
     const user = await prisma.user.findUnique({
-      where: { username }
+      where: { username },
+      include: { branch: { select: { id: true, name: true } } },
     });
 
     if (!user || !(await PasswordHasher.compare(password, user.password))) {
       return { success: false, error: 'نام کاربری یا رمز عبور اشتباه است' };
     }
 
-    const { password: _, ...safeUser } = user;
+    const { password: _, branch, ...safeUser } = user;
 
     // Establish a signed, httpOnly session cookie so subsequent Server Actions
     // can verify who is calling them (previously there was no server-side
@@ -156,9 +183,11 @@ export async function loginUser(username: string, password: string) {
       username: safeUser.username,
       name: safeUser.name,
       roles: safeUser.roles,
+      branchId: safeUser.branchId,
+      branchName: branch?.name || '',
     });
 
-    return { success: true, user: safeUser };
+    return { success: true, user: { ...safeUser, branchName: branch?.name || '' } };
   } catch (error) {
     console.error('Error logging in:', error);
     return { success: false, error: 'System error during login' };

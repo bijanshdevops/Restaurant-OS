@@ -170,6 +170,38 @@ Covered end-to-end by `tests/staffSchedule.test.ts` (role gating on shift/reques
 
 ---
 
+## Multi-Branch Support (Phase 5)
+
+Restaurant-OS now supports operating multiple physical branches (شعبه‌ها) from a single deployment.
+
+### Data model
+
+- **`Branch`**: name, address, phone, `isActive`, `isDefault` (exactly one branch is always the default; it cannot be deactivated).
+- **`User.branchId`**: every staff member belongs to exactly one branch. `ADMIN` users are branch-exempt: they see and manage every branch.
+- **`BranchInventoryStock`**: per-branch stock levels (`currentStock`, `minStockLevel`, `costPerUnit`, `lastRestocked`), unique per `(branchId, inventoryItemId)`. The `InventoryItem` model itself stays a chain-wide catalog (name/category/unit) shared by all branches.
+- **`Table`, `Reservation`, `Supplier`, `PurchaseOrder`, `Shift`, `Transaction`, `Order`** all carry a `branchId` (nullable on `Order`/`Transaction` for online orders — see below).
+
+### Access rules
+
+- Non-admin staff only ever see and act on data belonging to their own branch. Server actions enforce this with `resolveBranchFilter` (reads) and `resolveBranchForCreate` (writes), and explicitly re-check ownership before any update on an existing record (e.g. a cashier cannot change another branch's table status, reservation, purchase order, or shift assignment).
+- `ADMIN` accounts are exempt from branch scoping everywhere and can pass an explicit `branchId` to filter or target a specific branch.
+- Assigning a staff member to a shift validates that the staff member belongs to the shift's branch.
+
+### Known limitations (by design, for this phase)
+
+- **Online ordering stays branch-less.** `Order.branchId` / `Transaction.branchId` remain `null` for online/delivery orders; ingredient stock for these orders is deducted from the chain's default branch (`getDefaultBranchId()`). This keeps the public ordering flow simple until a future phase adds branch selection to the online storefront.
+- **Menu, recipes, customers, couriers, and global settings remain shared** across all branches — only inventory *stock levels*, tables/reservations, suppliers/purchase orders, shifts, and accounting transactions are branch-scoped.
+
+### UI
+
+- A new ADMIN-only **"شعبه‌ها" (Branches)** page (`/dashboard/branches`) for creating, editing, activating/deactivating, and setting the default branch.
+- The user-management screen gained a branch selector when creating staff, and a "شعبه" column in the staff table.
+- All other existing pages are unchanged visually — branch scoping happens transparently in the underlying server actions.
+
+Covered end-to-end by `tests/branches.test.ts`.
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, review process, and branching model.

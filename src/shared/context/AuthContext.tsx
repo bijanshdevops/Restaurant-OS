@@ -10,6 +10,9 @@ export interface User {
   name: string;
   username: string;
   roles: string[];
+  // --- Phase 5: multi-branch support ---
+  branchId?: string;
+  branchName?: string;
 }
 
 interface AuthContextType {

@@ -24,6 +24,12 @@ model User {
   reviewedStaffRequests StaffRequest[]    @relation("StaffRequestReviewer")
   targetedStaffRequests StaffRequest[]    @relation("StaffRequestTargetUser")
   payrollPayments       PayrollPayment[]
+
+  // --- Phase 5: multi-branch support ---
+  // شعبه‌ی محل خدمت این پرسنل. نقش ADMIN از این محدودیت مستثناست و همه‌ی
+  // شعبه‌ها را می‌بیند؛ سایر نقش‌ها همیشه به داده‌های همین شعبه محدودند.
+  branchId String
+  branch   Branch @relation(fields: [branchId], references: [id])
 }
 
 enum Role {
@@ -72,6 +78,14 @@ model Order {
   courierId       String?
   courier         Courier?        @relation(fields: [courierId], references: [id])
   payment         Payment?
+
+  // --- Phase 5: multi-branch support ---
+  // شعبه‌ای که این سفارش در آن ثبت شده. برای سفارش‌های حضوری/صندوق همیشه
+  // مقداردهی می‌شود؛ سفارش‌های آنلاین فعلاً شعبه‌ی مشخصی ندارند (کانال آنلاین
+  // هنوز انتخاب شعبه توسط مشتری را پشتیبانی نمی‌کند) و از موجودی شعبه‌ی
+  // پیش‌فرض کسر می‌شوند — نک. README برای جزئیات این محدودیت شناخته‌شده.
+  branchId String?
+  branch   Branch? @relation(fields: [branchId], references: [id])
 }
 
 enum OrderStatus {
@@ -109,19 +123,38 @@ model OrderItem {
   menuItem MenuItem @relation(fields: [menuItemId], references: [id])
 }
 
+// از فاز ۵ (چند شعبه‌ای) به بعد، InventoryItem فقط «کاتالوگ» مشترک بین همه‌ی
+// شعبه‌هاست (نام، واحد، دسته‌بندی و فرمول غذا/BOM) — موجودی، نقطه‌ی سفارش
+// مجدد و قیمت تمام‌شده‌ی واقعی هر ماده، چون بین شعبه‌ها متفاوت است، به
+// BranchInventoryStock منتقل شده (هر شعبه رکورد موجودی مستقل خودش را دارد).
 model InventoryItem {
-  id            String       @id @default(uuid())
-  name          String
-  category      String
-  unit          String
-  currentStock  Float        @default(0)
-  minStockLevel Float        @default(0)
-  costPerUnit   Float        @default(0)
-  lastRestocked DateTime     @default(now())
-  recipeItems   RecipeItem[]
+  id          String       @id @default(uuid())
+  name        String
+  category    String
+  unit        String
+  recipeItems RecipeItem[]
 
   // --- Phase 3: purchasing / supplier management ---
   purchaseOrderItems PurchaseOrderItem[]
+
+  // --- Phase 5: multi-branch support ---
+  branchStocks BranchInventoryStock[]
+}
+
+model BranchInventoryStock {
+  id              String   @id @default(uuid())
+  branchId        String
+  inventoryItemId String
+  currentStock    Float    @default(0)
+  minStockLevel   Float    @default(0)
+  costPerUnit     Float    @default(0)
+  lastRestocked   DateTime @default(now())
+
+  branch        Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, inventoryItemId])
+  @@index([inventoryItemId])
 }
 
 model RecipeItem {
@@ -249,12 +282,20 @@ model RestaurantSettings {
 
 model Table {
   id           String        @id @default(uuid())
-  number       Int           @unique
+  number       Int
   capacity     Int           @default(4)
   status       TableStatus   @default(AVAILABLE)
   createdAt    DateTime      @default(now())
   orders       Order[]
   reservations Reservation[]
+
+  // --- Phase 5: multi-branch support ---
+  // شماره‌ی میز فقط در محدوده‌ی هر شعبه یکتاست، نه در کل سیستم (هر شعبه
+  // می‌تواند میز شماره ۱ خودش را داشته باشد).
+  branchId String
+  branch   Branch @relation(fields: [branchId], references: [id])
+
+  @@unique([branchId, number])
 }
 
 enum TableStatus {
@@ -279,6 +320,10 @@ model Reservation {
 
   table    Table     @relation(fields: [tableId], references: [id])
   customer Customer? @relation(fields: [customerId], references: [id])
+
+  // --- Phase 5: multi-branch support --- (denormalized from table.branchId at creation, for direct filtering)
+  branchId String
+  branch   Branch @relation(fields: [branchId], references: [id])
 }
 
 enum ReservationStatus {
@@ -328,6 +373,12 @@ model Transaction {
   description String
   amount      Float
   createdAt   DateTime        @default(now())
+
+  // --- Phase 5: multi-branch support ---
+  // مثل Order.branchId: تراکنش‌های وابسته به یک شعبه (فروش صندوق، خرید،
+  // حقوق) مقداردهی می‌شوند؛ تراکنش سفارش‌های آنلاین فعلاً بدون شعبه‌اند.
+  branchId String?
+  branch   Branch? @relation(fields: [branchId], references: [id])
 }
 
 enum TransactionType {
@@ -380,6 +431,10 @@ model Supplier {
 
   purchaseOrders PurchaseOrder[]
   payments       SupplierPayment[]
+
+  // --- Phase 5: multi-branch support ---
+  branchId String
+  branch   Branch @relation(fields: [branchId], references: [id])
 }
 
 enum PurchaseOrderStatus {
@@ -404,6 +459,10 @@ model PurchaseOrder {
   supplier Supplier            @relation(fields: [supplierId], references: [id])
   items    PurchaseOrderItem[]
   payments SupplierPayment[]
+
+  // --- Phase 5: multi-branch support --- (denormalized from supplier.branchId at creation)
+  branchId String
+  branch   Branch @relation(fields: [branchId], references: [id])
 
   @@index([supplierId])
 }
@@ -459,7 +518,12 @@ model Shift {
 
   assignments ShiftAssignment[]
 
+  // --- Phase 5: multi-branch support ---
+  branchId String
+  branch   Branch @relation(fields: [branchId], references: [id])
+
   @@index([date])
+  @@index([branchId])
 }
 
 model ShiftAssignment {
@@ -548,4 +612,31 @@ model PayrollPayment {
   attendances Attendance[]
 
   @@index([userId])
+}
+
+// =====================================================================
+// Phase 5: Multi-Branch Support
+// =====================================================================
+
+// شعبه‌ی فیزیکی رستوران. دقیقاً یک شعبه باید isDefault=true داشته باشد —
+// همان شعبه‌ای که سفارش‌های آنلاین (که فعلاً انتخاب شعبه ندارند) و شعبه‌ی
+// اولیه‌ی سیستم (پیش از وجود این ماژول) به آن نگاشت می‌شوند.
+model Branch {
+  id        String   @id @default(uuid())
+  name      String
+  address   String   @default("")
+  phone     String   @default("")
+  isActive  Boolean  @default(true)
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  users           User[]
+  tables          Table[]
+  reservations    Reservation[]
+  orders          Order[]
+  transactions    Transaction[]
+  suppliers       Supplier[]
+  purchaseOrders  PurchaseOrder[]
+  shifts          Shift[]
+  inventoryStocks BranchInventoryStock[]
 }

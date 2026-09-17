@@ -10,6 +10,38 @@ export interface SessionUser {
   username: string;
   name: string;
   roles: Role[];
+  // --- Phase 5: multi-branch support ---
+  // شعبه‌ی محل خدمت این کاربر. نقش ADMIN از فیلتر شعبه مستثناست (همه‌جا را
+  // می‌بیند)؛ فقط سایر نقش‌ها همیشه به همین شعبه محدود می‌شوند.
+  branchId: string;
+  branchName: string;
+}
+
+/** true اگر این کاربر نقش ADMIN دارد و بنابراین از محدودیت شعبه مستثناست. */
+export function isBranchExempt(user: SessionUser): boolean {
+  return user.roles?.includes('ADMIN');
+}
+
+/**
+ * شعبه‌ی مؤثر برای یک عملیات: اگر کاربر ADMIN باشد و صریحاً شعبه‌ای
+ * انتخاب کرده باشد همان، وگرنه (برای ADMIN بدون انتخاب) undefined به‌معنای
+ * «همه‌ی شعبه‌ها»؛ برای غیر ADMIN همیشه شعبه‌ی خودش، صرف‌نظر از هر مقداری
+ * که از کلاینت رسیده — تا یک کاربر عادی هرگز نتواند با فرستادن یک
+ * branchId دلخواه به داده‌ی شعبه‌ی دیگری دسترسی پیدا کند.
+ */
+export function resolveBranchFilter(user: SessionUser, requestedBranchId?: string): string | undefined {
+  if (isBranchExempt(user)) {
+    return requestedBranchId || undefined;
+  }
+  return user.branchId;
+}
+
+/** شعبه‌ای که یک رکورد جدید باید به آن تعلق بگیرد: مثل resolveBranchFilter اما هرگز undefined برنمی‌گرداند (ADMIN بدون انتخاب صریح، به شعبه‌ی خودش می‌افتد). */
+export function resolveBranchForCreate(user: SessionUser, requestedBranchId?: string): string {
+  if (isBranchExempt(user) && requestedBranchId) {
+    return requestedBranchId;
+  }
+  return user.branchId;
 }
 
 function getSecret(): string {

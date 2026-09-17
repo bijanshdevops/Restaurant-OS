@@ -90,6 +90,10 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               <Link href="/dashboard/staff" className="text-gray-600 hover:text-blue-600 px-3 py-2 rounded-md text-sm font-medium transition-colors">پرسنل و شیفت‌ها</Link>
               
               {hasRole('ADMIN') && (
+                <Link href="/dashboard/branches" className="text-gray-600 hover:text-blue-600 px-3 py-2 rounded-md text-sm font-medium transition-colors">شعبه‌ها</Link>
+              )}
+
+              {hasRole('ADMIN') && (
                 <Link href="/dashboard/admin" className="text-amber-600 hover:text-amber-700 px-3 py-2 rounded-md text-sm font-bold transition-colors bg-amber-50 border border-amber-100">پنل مدیریت</Link>
               )}
             </nav>
@@ -97,7 +101,10 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
             <div className="flex items-center gap-4">
               <div className="flex flex-col text-left items-end">
                 <span className="text-sm font-bold text-gray-900">{user.name}</span>
-                <span className="text-xs text-gray-500 font-mono">{user.roles?.join(', ')}</span>
+                <span className="text-xs text-gray-500 font-mono">
+                  {user.roles?.join(', ')}
+                  {user.branchName ? ` · ${user.branchName}` : ''}
+                </span>
               </div>
               <button 
                 onClick={logout}

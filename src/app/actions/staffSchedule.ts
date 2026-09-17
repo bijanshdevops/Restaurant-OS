@@ -1,7 +1,7 @@
 "use server";
 
 import { prisma } from '@/lib/prisma';
-import { requireRole } from '@/lib/auth';
+import { requireRole, resolveBranchFilter, resolveBranchForCreate } from '@/lib/auth';
 
 // مدیریت شیفت‌ها، تخصیص پرسنل، بازبینی درخواست‌ها و اجرای حقوق‌دهی فقط
 // در اختیار مدیر سیستم است. اقدامات خودخدمت (مشاهده شیفت‌های خودم، ثبت
@@ -14,12 +14,14 @@ const STAFF_MANAGERS = ['ADMIN'] as const;
 // =====================================================================
 
 /** لیست شیفت‌ها همراه با تخصیص‌ها و وضعیت حضور، برای پنل مدیریت. */
-export async function getShifts(range?: { from?: string; to?: string }) {
+export async function getShifts(range?: { from?: string; to?: string }, branchId?: string) {
   const auth = await requireRole(...STAFF_MANAGERS);
   if (!auth.ok) return { success: false, error: auth.error };
 
   try {
+    const effectiveBranchId = resolveBranchFilter(auth.user, branchId);
     const where: any = {};
+    if (effectiveBranchId) where.branchId = effectiveBranchId;
     if (range?.from || range?.to) {
       where.date = {};
       if (range.from) where.date.gte = new Date(range.from);
@@ -30,6 +32,7 @@ export async function getShifts(range?: { from?: string; to?: string }) {
       where,
       orderBy: [{ date: 'asc' }, { startTime: 'asc' }],
       include: {
+        branch: { select: { id: true, name: true } },
         assignments: {
           include: { user: { select: { id: true, name: true, username: true } }, attendance: true },
         },
@@ -48,6 +51,7 @@ export async function createShift(data: {
   endTime: string;
   role?: string;
   notes?: string;
+  branchId?: string;
 }) {
   const auth = await requireRole(...STAFF_MANAGERS);
   if (!auth.ok) return { success: false, error: auth.error };
@@ -62,6 +66,7 @@ export async function createShift(data: {
   }
 
   try {
+    const effectiveBranchId = resolveBranchForCreate(auth.user, data.branchId);
     const shift = await prisma.shift.create({
       data: {
         date: new Date(data.date),
@@ -69,6 +74,7 @@ export async function createShift(data: {
         endTime,
         role: data.role?.trim() || '',
         notes: data.notes?.trim() || '',
+        branchId: effectiveBranchId,
       },
       include: { assignments: true },
     });
@@ -112,6 +118,12 @@ export async function assignStaffToShift(shiftId: string, userId: string) {
     if (!shift) return { success: false, error: 'شیفت یافت نشد' };
     if (shift.status === 'CANCELLED') {
       return { success: false, error: 'نمی‌توان به شیفت لغوشده پرسنل تخصیص داد' };
+    }
+
+    const targetStaff = await prisma.user.findUnique({ where: { id: userId } });
+    if (!targetStaff) return { success: false, error: 'کاربر یافت نشد' };
+    if (targetStaff.branchId !== shift.branchId) {
+      return { success: false, error: 'این کاربر متعلق به شعبه‌ی این شیفت نیست' };
     }
 
     const existing = await prisma.shiftAssignment.findUnique({
@@ -260,7 +272,10 @@ export async function getStaffDirectory() {
   if (!auth.ok) return { success: false, error: auth.error };
 
   try {
+    // برای جابجایی شیفت، همکار مقصد باید در همان شعبه باشد؛ مدیر سیستم همه را می‌بیند.
+    const effectiveBranchId = resolveBranchFilter(auth.user);
     const users = await prisma.user.findMany({
+      where: effectiveBranchId ? { branchId: effectiveBranchId } : undefined,
       orderBy: { name: 'asc' },
       select: { id: true, name: true, username: true },
     });
@@ -592,6 +607,7 @@ export async function runPayroll(userId: string, periodStart: string, periodEnd:
           type: 'EXPENSE',
           description: `پرداخت حقوق ${user.name} (${periodStart.slice(0, 10)} تا ${periodEnd.slice(0, 10)})`,
           amount: totalAmount,
+          branchId: user.branchId,
         },
       });
 

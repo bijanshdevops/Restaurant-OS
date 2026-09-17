@@ -1,16 +1,21 @@
 "use server";
 
 import { prisma } from '@/lib/prisma';
-import { requireRole } from '@/lib/auth';
+import { requireRole, resolveBranchFilter, resolveBranchForCreate, isBranchExempt } from '@/lib/auth';
 
 const PROCUREMENT_ROLES = ['ADMIN', 'INVENTORY_MANAGER', 'ACCOUNTANT'] as const;
 
-export async function getSuppliers() {
+export async function getSuppliers(branchId?: string) {
   const auth = await requireRole(...PROCUREMENT_ROLES);
   if (!auth.ok) return { success: false, error: auth.error };
 
   try {
-    const suppliers = await prisma.supplier.findMany({ orderBy: { name: 'asc' } });
+    const effectiveBranchId = resolveBranchFilter(auth.user, branchId);
+    const suppliers = await prisma.supplier.findMany({
+      where: effectiveBranchId ? { branchId: effectiveBranchId } : undefined,
+      orderBy: { name: 'asc' },
+      include: { branch: { select: { id: true, name: true } } },
+    });
     return { success: true, suppliers };
   } catch (error) {
     console.error('Error fetching suppliers:', error);
@@ -23,6 +28,7 @@ export async function createSupplier(data: {
   contactName?: string;
   phone?: string;
   address?: string;
+  branchId?: string;
 }) {
   const auth = await requireRole(...PROCUREMENT_ROLES);
   if (!auth.ok) return { success: false, error: auth.error };
@@ -32,12 +38,14 @@ export async function createSupplier(data: {
   }
 
   try {
+    const branchId = resolveBranchForCreate(auth.user, data.branchId);
     const supplier = await prisma.supplier.create({
       data: {
         name: data.name.trim(),
         contactName: data.contactName?.trim() || '',
         phone: data.phone?.trim() || '',
         address: data.address?.trim() || '',
+        branchId,
       },
     });
     return { success: true, supplier };
@@ -61,6 +69,12 @@ export async function updateSupplier(id: string, data: {
   }
 
   try {
+    const existing = await prisma.supplier.findUnique({ where: { id } });
+    if (!existing) return { success: false, error: 'تأمین‌کننده یافت نشد' };
+    if (!isBranchExempt(auth.user) && existing.branchId !== auth.user.branchId) {
+      return { success: false, error: 'دسترسی غیرمجاز' };
+    }
+
     const supplier = await prisma.supplier.update({
       where: { id },
       data: {
@@ -82,6 +96,12 @@ export async function setSupplierActive(id: string, isActive: boolean) {
   if (!auth.ok) return { success: false, error: auth.error };
 
   try {
+    const existing = await prisma.supplier.findUnique({ where: { id } });
+    if (!existing) return { success: false, error: 'تأمین‌کننده یافت نشد' };
+    if (!isBranchExempt(auth.user) && existing.branchId !== auth.user.branchId) {
+      return { success: false, error: 'دسترسی غیرمجاز' };
+    }
+
     const supplier = await prisma.supplier.update({ where: { id }, data: { isActive } });
     return { success: true, supplier };
   } catch (error) {
@@ -115,6 +135,12 @@ export async function recordSupplierPayment(data: {
   }
 
   try {
+    const supplier = await prisma.supplier.findUnique({ where: { id: data.supplierId } });
+    if (!supplier) return { success: false, error: 'تأمین‌کننده یافت نشد' };
+    if (!isBranchExempt(auth.user) && supplier.branchId !== auth.user.branchId) {
+      return { success: false, error: 'دسترسی غیرمجاز' };
+    }
+
     const [payment] = await prisma.$transaction([
       prisma.supplierPayment.create({
         data: {
@@ -154,6 +180,9 @@ export async function getSupplierLedger(supplierId: string) {
       },
     });
     if (!supplier) return { success: false, error: 'تأمین‌کننده یافت نشد' };
+    if (!isBranchExempt(auth.user) && supplier.branchId !== auth.user.branchId) {
+      return { success: false, error: 'دسترسی غیرمجاز' };
+    }
     return { success: true, supplier };
   } catch (error) {
     console.error('Error fetching supplier ledger:', error);

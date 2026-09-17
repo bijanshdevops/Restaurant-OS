@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import * as XLSX from 'xlsx';
 import { getMenuItems, createMenuItem, updateMenuItem, deleteMenuItem, createMenuItemsBulk } from '@/app/actions/menu';
 import { getUsers, createUser, deleteUser } from '@/app/actions/user';
+import { getBranches } from '@/app/actions/branch';
 import { getPrinters, createPrinter, updatePrinter, deletePrinter } from '@/app/actions/printer';
 import { getMenuCostAnalysis, getMenuItemRecipe, saveMenuItemRecipe, updateInventoryItemCost } from '@/app/actions/costing';
 import { getSettings, updateSettings } from '@/app/actions/settings';
@@ -26,6 +27,13 @@ interface UserData {
   username: string;
   roles: Role[];
   createdAt: Date;
+  branchId?: string;
+  branch?: { id: string; name: string } | null;
+}
+
+interface BranchOption {
+  id: string;
+  name: string;
 }
 
 interface PrinterData {
@@ -89,10 +97,11 @@ export default function AdminPage() {
   const [users, setUsers] = useState<UserData[]>([]);
   const [isLoadingUsers, setIsLoadingUsers] = useState(false);
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
-  const [userFormData, setUserFormData] = useState<{name: string, username: string, password: string, roles: Role[]}>({
-    name: '', username: '', password: '', roles: ['CASHIER']
+  const [userFormData, setUserFormData] = useState<{name: string, username: string, password: string, roles: Role[], branchId: string}>({
+    name: '', username: '', password: '', roles: ['CASHIER'], branchId: ''
   });
   const [userError, setUserError] = useState('');
+  const [branches, setBranches] = useState<BranchOption[]>([]);
 
   // --- Printers Management State ---
   const [printers, setPrinters] = useState<PrinterData[]>([]);
@@ -168,9 +177,12 @@ export default function AdminPage() {
 
   const fetchUsers = useCallback(async () => {
     setIsLoadingUsers(true);
-    const res = await getUsers();
-    if (res.success && res.users) {
-      setUsers(res.users.map((u: any) => ({ ...u, createdAt: new Date(u.createdAt) })));
+    const [usersRes, branchesRes] = await Promise.all([getUsers(), getBranches()]);
+    if (usersRes.success && usersRes.users) {
+      setUsers(usersRes.users.map((u: any) => ({ ...u, createdAt: new Date(u.createdAt) })));
+    }
+    if (branchesRes.success && branchesRes.branches) {
+      setBranches(branchesRes.branches as unknown as BranchOption[]);
     }
     setIsLoadingUsers(false);
   }, []);
@@ -454,11 +466,11 @@ export default function AdminPage() {
       return;
     }
 
-    const res = await createUser(userFormData);
+    const res = await createUser({ ...userFormData, branchId: userFormData.branchId || undefined });
     if (res.success && res.user) {
       setUsers([...users, res.user as any]);
       setIsUserModalOpen(false);
-      setUserFormData({ name: '', username: '', password: '', roles: ['CASHIER'] });
+      setUserFormData({ name: '', username: '', password: '', roles: ['CASHIER'], branchId: '' });
     } else {
       setUserError(res.error || 'خطا در ساخت کاربر');
     }
@@ -776,6 +788,7 @@ export default function AdminPage() {
                     <tr>
                       <th scope="col" className="px-6 py-4 text-xs font-bold text-gray-600">نام و نام خانوادگی</th>
                       <th scope="col" className="px-6 py-4 text-xs font-bold text-gray-600">نام کاربری</th>
+                      <th scope="col" className="px-6 py-4 text-xs font-bold text-gray-600 text-center">شعبه</th>
                       <th scope="col" className="px-6 py-4 text-xs font-bold text-gray-600 text-center">نقش سیستمی</th>
                       <th scope="col" className="px-6 py-4 text-xs font-bold text-gray-600 text-center">عملیات</th>
                     </tr>
@@ -793,6 +806,9 @@ export default function AdminPage() {
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <span className="text-sm font-mono tracking-widest text-gray-700 bg-gray-100 px-2 py-1 rounded-md">{user.username}</span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-center">
+                          <span className="text-xs font-bold text-gray-600 bg-gray-100 px-2 py-1 rounded-md">{user.branch?.name || '—'}</span>
                         </td>
                         <td className="px-6 py-4 text-center max-w-[200px]">
                           <div className="flex flex-wrap gap-1 justify-center">
@@ -1503,6 +1519,20 @@ export default function AdminPage() {
                   placeholder="••••"
                   dir="ltr"
                 />
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-1">شعبه</label>
+                <select
+                  value={userFormData.branchId}
+                  onChange={e => setUserFormData({...userFormData, branchId: e.target.value})}
+                  className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none transition-all bg-white font-sans"
+                >
+                  <option value="">— شعبه‌ی خودم (پیش‌فرض) —</option>
+                  {branches.map((b) => (
+                    <option key={b.id} value={b.id}>{b.name}</option>
+                  ))}
+                </select>
               </div>
 
               <div>

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { loginUser, logoutUser, createUser, updateUserHourlyRate } from '@/app/actions/user';
+import { loginUser, logoutUser, createUser, updateUserHourlyRate, updateUserBranch } from '@/app/actions/user';
+import { getBranches, createBranch, updateBranch, setBranchActive, setDefaultBranch } from '@/app/actions/branch';
 import { getMenuItems, createMenuItem, getPublicMenuItems } from '@/app/actions/menu';
 import {
   createOrder,
@@ -10,7 +11,7 @@ import {
   finalizeOnlineOrderAfterPayment,
   markOnlineOrderPaymentFailed,
 } from '@/app/actions/order';
-import { getTables, createTable, createReservation, getReservations, updateReservationStatus } from '@/app/actions/reservation';
+import { getTables, createTable, updateTableStatus, createReservation, getReservations, updateReservationStatus } from '@/app/actions/reservation';
 import { getSettings, updateSettings, updateModianSettings, getPublicOrderSettings } from '@/app/actions/settings';
 import { getUsers } from '@/app/actions/user';
 import { getCustomers } from '@/app/actions/crm';
@@ -25,7 +26,8 @@ import {
   markDeliveryFailed,
 } from '@/app/actions/delivery';
 import { getInventoryItems, createInventoryItem, restockInventoryItem } from '@/app/actions/inventory';
-import { getTransactions } from '@/app/actions/accounting';
+import { getMenuCostAnalysis, getMenuItemRecipe, saveMenuItemRecipe, updateInventoryItemCost } from '@/app/actions/costing';
+import { getTransactions, createExpense } from '@/app/actions/accounting';
 import {
   getSuppliers,
   createSupplier,
@@ -79,6 +81,12 @@ const actions: Record<string, (...args: any[]) => Promise<any>> = {
   logout: logoutUser,
   createUser,
   getUsers,
+  updateUserBranch,
+  getBranches,
+  createBranch,
+  updateBranch,
+  setBranchActive,
+  setDefaultBranch,
   getMenuItems,
   createMenuItem,
   createOrder,
@@ -86,6 +94,7 @@ const actions: Record<string, (...args: any[]) => Promise<any>> = {
   updateOrderStatus,
   getTables,
   createTable,
+  updateTableStatus,
   createReservation,
   getReservations,
   updateReservationStatus,
@@ -113,7 +122,12 @@ const actions: Record<string, (...args: any[]) => Promise<any>> = {
   getInventoryItems,
   createInventoryItem,
   restockInventoryItem,
+  getMenuCostAnalysis,
+  getMenuItemRecipe,
+  saveMenuItemRecipe,
+  updateInventoryItemCost,
   getTransactions,
+  createExpense,
   getSuppliers,
   createSupplier,
   updateSupplier,

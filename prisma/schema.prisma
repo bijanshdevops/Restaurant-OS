@@ -109,6 +109,9 @@ model InventoryItem {
   costPerUnit   Float    @default(0)
   lastRestocked DateTime @default(now())
   recipeItems   RecipeItem[]
+
+  // --- Phase 3: purchasing / supplier management ---
+  purchaseOrderItems PurchaseOrderItem[]
 }
 
 model RecipeItem {
@@ -346,4 +349,81 @@ enum PrinterConnectionType {
   NETWORK
   USB
   BLUETOOTH
+}
+
+
+// =====================================================================
+// Phase 3: Purchasing & Supplier Management
+// =====================================================================
+
+model Supplier {
+  id          String   @id @default(uuid())
+  name        String
+  contactName String   @default("")
+  phone       String   @default("")
+  address     String   @default("")
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  // مانده بدهی ما به این تأمین‌کننده: با دریافت واقعی کالا افزایش،
+  // و با ثبت پرداخت کاهش می‌یابد. هرگز مستقیماً از کلاینت تنظیم نمی‌شود.
+  balanceOwed Float @default(0)
+
+  purchaseOrders PurchaseOrder[]
+  payments       SupplierPayment[]
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  ORDERED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
+model PurchaseOrder {
+  id          String              @id @default(uuid())
+  poNumber    String              @unique
+  supplierId  String
+  status      PurchaseOrderStatus @default(DRAFT)
+  totalAmount Float               @default(0)
+  notes       String              @default("")
+  createdAt   DateTime            @default(now())
+  orderedAt   DateTime?
+  receivedAt  DateTime?
+
+  supplier Supplier            @relation(fields: [supplierId], references: [id])
+  items    PurchaseOrderItem[]
+  payments SupplierPayment[]
+
+  @@index([supplierId])
+}
+
+model PurchaseOrderItem {
+  id               String @id @default(uuid())
+  purchaseOrderId  String
+  inventoryItemId  String
+  quantityOrdered  Float
+  quantityReceived Float  @default(0)
+  unitCost         Float
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id])
+
+  @@index([inventoryItemId])
+}
+
+model SupplierPayment {
+  id              String   @id @default(uuid())
+  supplierId      String
+  purchaseOrderId String?
+  amount          Float
+  method          String   @default("")
+  note            String   @default("")
+  createdAt       DateTime @default(now())
+
+  supplier      Supplier       @relation(fields: [supplierId], references: [id])
+  purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+
+  @@index([supplierId])
 }

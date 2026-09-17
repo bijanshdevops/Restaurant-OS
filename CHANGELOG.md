@@ -10,6 +10,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 ## [Unreleased]
 
 ### Added
+- Purchasing & supplier management: full purchase-order cycle (draft → ordered → partially/fully received, plus cancellation), supplier accounts payable with a per-supplier ledger and payment recording, low-stock reorder suggestions, and cross-supplier purchase-price history. Stock, cost, and the accounting/EXPENSE booking only ever move at actual goods receipt, never at order/draft time.
+- `tests/procurement.test.ts` covering the purchasing flow end-to-end.
 - Online ordering & delivery: customer accounts with SMS OTP login, public menu/cart, checkout with server-verified pricing, ZarinPal payment integration (sandbox by default), order tracking, and a staff delivery dashboard with full courier lifecycle management (assign → picked up → on the way → delivered).
 - Customer loyalty club: points earned per purchase and redeemable for a discount, with an automatic lifetime-spend tier (NORMAL/BRONZE/SILVER/GOLD/VIP) shared between the POS and online ordering flows.
 - `tests/onlineOrdering.test.ts` and `tests/loyalty.test.ts` covering the new flows end-to-end.

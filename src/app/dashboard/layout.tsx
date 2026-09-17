@@ -77,6 +77,14 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               {(hasRole('ADMIN') || hasRole('CASHIER')) && (
                 <Link href="/dashboard/delivery" className="text-gray-600 hover:text-blue-600 px-3 py-2 rounded-md text-sm font-medium transition-colors">پیک و تحویل</Link>
               )}
+
+              {(hasRole('ADMIN') || hasRole('INVENTORY_MANAGER') || hasRole('ACCOUNTANT')) && (
+                <Link href="/dashboard/purchase-orders" className="text-gray-600 hover:text-blue-600 px-3 py-2 rounded-md text-sm font-medium transition-colors">سفارش خرید</Link>
+              )}
+
+              {(hasRole('ADMIN') || hasRole('INVENTORY_MANAGER') || hasRole('ACCOUNTANT')) && (
+                <Link href="/dashboard/suppliers" className="text-gray-600 hover:text-blue-600 px-3 py-2 rounded-md text-sm font-medium transition-colors">تأمین‌کنندگان</Link>
+              )}
               
               {hasRole('ADMIN') && (
                 <Link href="/dashboard/admin" className="text-amber-600 hover:text-amber-700 px-3 py-2 rounded-md text-sm font-bold transition-colors bg-amber-50 border border-amber-100">پنل مدیریت</Link>

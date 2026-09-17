@@ -24,6 +24,25 @@ import {
   advanceDeliveryStatus,
   markDeliveryFailed,
 } from '@/app/actions/delivery';
+import { getInventoryItems, createInventoryItem, restockInventoryItem } from '@/app/actions/inventory';
+import { getTransactions } from '@/app/actions/accounting';
+import {
+  getSuppliers,
+  createSupplier,
+  updateSupplier,
+  setSupplierActive,
+  recordSupplierPayment,
+  getSupplierLedger,
+} from '@/app/actions/supplier';
+import {
+  getPurchaseOrders,
+  createPurchaseOrder,
+  markPurchaseOrderOrdered,
+  cancelPurchaseOrder,
+  receivePurchaseOrderItems,
+  getLowStockItems,
+  getItemPriceHistory,
+} from '@/app/actions/purchaseOrder';
 
 /**
  * دروازه‌ی کمکی مخصوص تست‌های خودکار (Vitest / CI).
@@ -72,6 +91,23 @@ const actions: Record<string, (...args: any[]) => Promise<any>> = {
   advanceDeliveryStatus,
   markDeliveryFailed,
   getCustomers,
+  getInventoryItems,
+  createInventoryItem,
+  restockInventoryItem,
+  getTransactions,
+  getSuppliers,
+  createSupplier,
+  updateSupplier,
+  setSupplierActive,
+  recordSupplierPayment,
+  getSupplierLedger,
+  getPurchaseOrders,
+  createPurchaseOrder,
+  markPurchaseOrderOrdered,
+  cancelPurchaseOrder,
+  receivePurchaseOrderItems,
+  getLowStockItems,
+  getItemPriceHistory,
 };
 
 function guard() {

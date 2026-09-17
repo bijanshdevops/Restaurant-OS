@@ -144,6 +144,19 @@ Covered by `tests/onlineOrdering.test.ts` and `tests/loyalty.test.ts` (OTP login
 
 ---
 
+## Purchasing & Supplier Management (Phase 3)
+
+Full purchase-order cycle for buying inventory from suppliers, at `/dashboard/purchase-orders` and `/dashboard/suppliers` (staff with ADMIN, INVENTORY_MANAGER, or ACCOUNTANT):
+
+- **Purchase orders** — `DRAFT → ORDERED → PARTIALLY_RECEIVED/RECEIVED`, plus `CANCELLED` (only while nothing has been received yet). Stock, cost, accounting, and the supplier's balance only change at the moment goods are actually received (`receivePurchaseOrderItems`), never when a PO is merely drafted or ordered — so a PO that's cancelled or never delivered has zero effect on inventory or the books. Receiving supports partial batches and can be called repeatedly as more of an order arrives; it's clamped so a batch can never receive more than what's still outstanding.
+- **Supplier accounts payable** — each received PO increases `Supplier.balanceOwed` by the real cost of goods received (and books the matching EXPENSE transaction); `recordSupplierPayment` reduces that balance without booking a second expense, since the cost was already recognized at receipt — a payment only settles the payable. `/dashboard/suppliers` shows each supplier's balance and a per-supplier ledger (orders + payments).
+- **Low-stock reorder suggestions** — any inventory item at or below its existing `minStockLevel` (the same "reorder point" field already used for restocking) surfaces at the top of `/dashboard/purchase-orders` with a suggested reorder quantity (a simple "top back up to 2× the reorder point" heuristic — freely editable before submitting).
+- **Purchase price history** — `getItemPriceHistory` / the price-history panel on the purchase-orders page shows every past order line for an item (date, supplier, quantity, unit cost), for comparing suppliers or spotting price drift.
+
+Covered end-to-end by `tests/procurement.test.ts` (low-stock detection, PO creation and totals, rejecting receipt on a draft, partial and completing receipt with correct stock/cost/expense/balance updates, over-receipt clamping, payment reducing the balance, price history, and cancellation rules).
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, review process, and branching model.

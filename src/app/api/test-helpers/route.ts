@@ -14,8 +14,19 @@ import {
 import { getTables, createTable, updateTableStatus, createReservation, getReservations, updateReservationStatus } from '@/app/actions/reservation';
 import { getSettings, updateSettings, updateModianSettings, getPublicOrderSettings } from '@/app/actions/settings';
 import { getUsers } from '@/app/actions/user';
-import { getCustomers } from '@/app/actions/crm';
-import { requestOtp, verifyOtp, logoutCustomer, getCustomerProfile } from '@/app/actions/customerAuth';
+import {
+  getCustomers,
+  createCustomer,
+  getCustomerDetail,
+  addCustomerNote,
+  updateCustomerProfile,
+  getCustomerSegmentPreview,
+  getDistinctCustomerTags,
+  getUpcomingBirthdayCustomers,
+} from '@/app/actions/crm';
+import { createCampaign, sendCampaign, getCampaigns, getCampaignDetail } from '@/app/actions/marketing';
+import { submitOrderFeedback, getFeedbackList } from '@/app/actions/feedback';
+import { requestOtp, verifyOtp, logoutCustomer, getCustomerProfile, getMyReferralInfo } from '@/app/actions/customerAuth';
 import {
   getCouriers,
   createCourier,
@@ -107,6 +118,7 @@ const actions: Record<string, (...args: any[]) => Promise<any>> = {
   verifyOtp,
   logoutCustomer,
   getCustomerProfile,
+  getMyReferralInfo,
   createOnlineOrder,
   getMyOnlineOrder,
   finalizeOnlineOrderAfterPayment,
@@ -119,6 +131,19 @@ const actions: Record<string, (...args: any[]) => Promise<any>> = {
   advanceDeliveryStatus,
   markDeliveryFailed,
   getCustomers,
+  createCustomer,
+  getCustomerDetail,
+  addCustomerNote,
+  updateCustomerProfile,
+  getCustomerSegmentPreview,
+  getDistinctCustomerTags,
+  getUpcomingBirthdayCustomers,
+  createCampaign,
+  sendCampaign,
+  getCampaigns,
+  getCampaignDetail,
+  submitOrderFeedback,
+  getFeedbackList,
   getInventoryItems,
   createInventoryItem,
   restockInventoryItem,

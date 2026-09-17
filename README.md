@@ -202,6 +202,43 @@ Covered end-to-end by `tests/branches.test.ts`.
 
 ---
 
+## CRM & Marketing (Phase 6)
+
+A full customer-relationship and marketing layer on top of the Phase 2 loyalty club.
+
+### Customer profiles
+
+Beyond the loyalty fields (`totalOrders`, `totalSpent`, `loyaltyTier`, `pointsBalance`), each `Customer` now also carries `email`, free-form `tags`, a `marketingOptIn` flag, and an optional `dateOfBirth`. ADMIN can edit these from the CRM dashboard and attach internal, timestamped `CustomerNote`s (staff-visible only — never shown to the customer).
+
+### Segmentation & campaigns
+
+A `Campaign` targets one segment — all opted-in customers, a loyalty tier, a tag, or customers inactive for N days (win-back) — and is created as a `DRAFT` with a live audience preview (`getCustomerSegmentPreview`) before anything is sent. Sending (`sendCampaign`) re-resolves the segment, respects `marketingOptIn` (an opted-out customer is never contacted), and records a `CampaignRecipient` row per customer with its own delivery status — so a campaign can only be sent once and always leaves an audit trail of who actually received it.
+
+### Automated-style messages
+
+There is no job scheduler in this deployment (no cron, no background worker), so "automated" messages here are computed segments an ADMIN triggers manually rather than something that fires on its own overnight:
+
+- **Welcome message** — sent immediately, once, when a customer is first created (either by staff at the POS or via online OTP self-registration) — a transactional message, sent regardless of `marketingOptIn`.
+- **Win-back** — the `INACTIVE` campaign segment (configurable "no visit in N days").
+- **Birthday greeting** — `getUpcomingBirthdayCustomers` computes customers whose birthday (month/day, any year) falls in the next N days; the CRM campaign composer offers it as a one-click segment that resolves to those customers under the hood.
+
+### Order feedback
+
+A customer can rate (1–5) and comment on any of their own orders once it reaches `COMPLETED`, from the online customer portal (`/order/orders/[id]`) — works for an order from any channel (POS or online), as long as it's linked to their customer account. ADMIN sees every review and the overall average rating in the CRM dashboard's feedback tab.
+
+### Referral program
+
+Every customer gets a shareable `referralCode` (generated lazily on first use for pre-Phase-6 customers). Entering someone else's code at OTP sign-up links the new customer to their referrer (`referredByCustomerId`); on that new customer's very first order (POS or online), the referrer is credited a one-time bonus (`RestaurantSettings.referralBonusPoints`, default 50) as a loyalty-point transaction — guarded by a `referralRewardGranted` flag so it can never be paid out twice, even if the same order is re-processed.
+
+### Access & scope
+
+- **CRM management is ADMIN-only**: customer notes/profile editing, segmentation, campaigns, and the feedback dashboard all require the `ADMIN` role. This is narrower than `getCustomers`/`createCustomer`, which stay open to `CASHIER` too — those two actions are shared with the POS checkout flow (attaching a customer to a sale for loyalty points) and were deliberately left untouched.
+- Customers, and therefore all of CRM, remain global/shared across branches — consistent with the Phase 5 multi-branch design, which already keeps the customer base unscoped.
+
+Covered end-to-end by `tests/crm.test.ts`.
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, review process, and branching model.

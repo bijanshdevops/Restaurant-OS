@@ -30,6 +30,10 @@ model User {
   // شعبه‌ها را می‌بیند؛ سایر نقش‌ها همیشه به داده‌های همین شعبه محدودند.
   branchId String
   branch   Branch @relation(fields: [branchId], references: [id])
+
+  // --- Phase 6: CRM & marketing ---
+  customerNotes    CustomerNote[]
+  createdCampaigns Campaign[]
 }
 
 enum Role {
@@ -86,6 +90,9 @@ model Order {
   // پیش‌فرض کسر می‌شوند — نک. README برای جزئیات این محدودیت شناخته‌شده.
   branchId String?
   branch   Branch? @relation(fields: [branchId], references: [id])
+
+  // --- Phase 6: CRM & marketing ---
+  feedback OrderFeedback?
 }
 
 enum OrderStatus {
@@ -183,6 +190,28 @@ model Customer {
   // --- Phase 2: loyalty points club ---
   pointsBalance       Int                  @default(0)
   loyaltyTransactions LoyaltyTransaction[]
+
+  // --- Phase 6: CRM & marketing ---
+  email          String?
+  tags           String[]  @default([])
+  marketingOptIn Boolean   @default(true)
+  dateOfBirth    DateTime?
+
+  notes              CustomerNote[]
+  campaignRecipients CampaignRecipient[]
+  feedbacks          OrderFeedback[]
+
+  // برنامه‌ی معرفی: کد اختصاصی هر مشتری برای دعوت دوستان (به‌صورت تنبل و
+  // فقط در اولین درخواست ساخته می‌شود، نه لزوماً همان لحظه‌ی ثبت‌نام).
+  referralCode String? @unique
+
+  // مشتری‌ای که این مشتری را معرفی کرده (اگر هنگام ثبت‌نام کد معتبری وارد شده باشد).
+  referredByCustomerId String?
+  referredByCustomer   Customer?  @relation("CustomerReferrals", fields: [referredByCustomerId], references: [id])
+  referredCustomers    Customer[] @relation("CustomerReferrals")
+
+  // جلوگیری از اعطای دوبارهٔ پاداش معرفی: فقط یک‌بار، در اولین سفارش این مشتری.
+  referralRewardGranted Boolean @default(false)
 }
 
 model OtpCode {
@@ -276,6 +305,10 @@ model RestaurantSettings {
 
   // --- Phase 2: delivery ---
   defaultDeliveryFee Float @default(0)
+
+  // --- Phase 6: CRM & marketing ---
+  // تعداد امتیاز پاداشی که معرفی‌کننده در اولین سفارش مشتری معرفی‌شده دریافت می‌کند.
+  referralBonusPoints Int @default(50)
 
   updatedAt DateTime @updatedAt
 }
@@ -639,4 +672,95 @@ model Branch {
   purchaseOrders  PurchaseOrder[]
   shifts          Shift[]
   inventoryStocks BranchInventoryStock[]
+}
+
+
+// =====================================================================
+// Phase 6: CRM & Marketing
+// =====================================================================
+
+enum CampaignSegmentType {
+  ALL // همه‌ی مشتریانی که اجازه‌ی دریافت پیامک بازاریابی داده‌اند
+  TIER // یک سطح مشخص از باشگاه وفاداری (segmentParams.tier)
+  TAG // مشتریان دارای یک برچسب مشخص (segmentParams.tag)
+  INACTIVE // مشتریانی که از N روز پیش بازدید/سفارشی نداشته‌اند (segmentParams.daysSinceLastVisit)
+  CUSTOM // فهرست دستی از شناسه‌ی مشتریان (segmentParams.customerIds)
+}
+
+enum CampaignStatus {
+  DRAFT
+  SENDING
+  SENT
+  FAILED
+}
+
+enum CampaignRecipientStatus {
+  PENDING
+  SENT
+  FAILED
+  SKIPPED_OPT_OUT
+}
+
+// یادداشت داخلی پرسنل روی پروفایل یک مشتری (تاریخچه‌ی تعامل/سلیقه/شکایت و...).
+model CustomerNote {
+  id         String   @id @default(uuid())
+  customerId String
+  authorId   String
+  content    String
+  createdAt  DateTime @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  author   User     @relation(fields: [authorId], references: [id])
+
+  @@index([customerId])
+}
+
+// یک کمپین پیامکی بازاریابی: پیام + بخش هدف (segment)؛ فقط ADMIN می‌سازد و ارسال می‌کند.
+model Campaign {
+  id             String              @id @default(uuid())
+  name           String
+  message        String
+  segmentType    CampaignSegmentType
+  segmentParams  Json?
+  status         CampaignStatus      @default(DRAFT)
+  recipientCount Int                 @default(0)
+  sentCount      Int                 @default(0)
+  failedCount    Int                 @default(0)
+  createdById    String
+  createdAt      DateTime            @default(now())
+  sentAt         DateTime?
+
+  createdBy  User                @relation(fields: [createdById], references: [id])
+  recipients CampaignRecipient[]
+}
+
+// وضعیت ارسال یک کمپین به هر مشتری، برای گزارش‌گیری و جلوگیری از ارسال تکراری.
+model CampaignRecipient {
+  id         String                  @id @default(uuid())
+  campaignId String
+  customerId String
+  status     CampaignRecipientStatus @default(PENDING)
+  sentAt     DateTime?
+  error      String?
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@unique([campaignId, customerId])
+  @@index([customerId])
+}
+
+// بازخورد/امتیاز مشتری روی یک سفارش تکمیل‌شده (از طریق پورتال آنلاین مشتری).
+model OrderFeedback {
+  id         String   @id @default(uuid())
+  orderId    String   @unique
+  customerId String
+  rating     Int
+  comment    String   @default("")
+  createdAt  DateTime @default(now())
+
+  order    Order    @relation(fields: [orderId], references: [id])
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@index([customerId])
 }

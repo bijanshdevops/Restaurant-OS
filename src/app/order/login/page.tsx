@@ -12,6 +12,7 @@ export default function CustomerLoginPage() {
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
   const [fullName, setFullName] = useState('');
+  const [referralCode, setReferralCode] = useState('');
   const [devCode, setDevCode] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -34,7 +35,7 @@ export default function CustomerLoginPage() {
     e.preventDefault();
     setError('');
     setIsLoading(true);
-    const res = await verifyOtp(phone, code, fullName);
+    const res = await verifyOtp(phone, code, fullName, referralCode);
     setIsLoading(false);
     if (res.success && res.customer) {
       login({ id: res.customer.id, phone: res.customer.phone, fullName: res.customer.fullName });
@@ -125,6 +126,17 @@ export default function CustomerLoginPage() {
                   onChange={(e) => setFullName(e.target.value)}
                   className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
                   placeholder="نام و نام خانوادگی"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-2">کد معرفی (اختیاری، فقط برای ثبت‌نام جدید)</label>
+                <input
+                  type="text"
+                  value={referralCode}
+                  onChange={(e) => setReferralCode(e.target.value)}
+                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-left font-mono tracking-widest"
+                  dir="ltr"
+                  placeholder="REF-XXXXXX"
                 />
               </div>
               <button

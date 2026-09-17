@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { getCustomerProfile } from '@/app/actions/customerAuth';
+import { getCustomerProfile, getMyReferralInfo } from '@/app/actions/customerAuth';
 import { useCustomerAuth } from '@/shared/context/CustomerAuthContext';
 import { formatCurrency, formatDate, toPersianDigits } from '@/shared/utils/formatters';
 
@@ -19,13 +19,23 @@ export default function CustomerProfilePage() {
   const { logout } = useCustomerAuth();
   const [customer, setCustomer] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [referralInfo, setReferralInfo] = useState<{ referralCode: string; referredCount: number; rewardedCount: number } | null>(null);
 
   useEffect(() => {
     getCustomerProfile().then((res: any) => {
       if (res.success) setCustomer(res.customer);
       setIsLoading(false);
     });
+    getMyReferralInfo().then((res: any) => {
+      if (res.success) setReferralInfo({ referralCode: res.referralCode, referredCount: res.referredCount, rewardedCount: res.rewardedCount });
+    });
   }, []);
+
+  const handleCopyReferralCode = () => {
+    if (!referralInfo) return;
+    navigator.clipboard?.writeText(referralInfo.referralCode).catch(() => {});
+    alert('کد معرفی کپی شد!');
+  };
 
   if (isLoading) {
     return <div className="min-h-screen flex items-center justify-center font-sans">درحال بارگذاری...</div>;
@@ -48,6 +58,24 @@ export default function CustomerProfilePage() {
             </div>
           </div>
         </div>
+
+        {referralInfo && (
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+            <h2 className="font-bold text-gray-900 mb-3">دعوت از دوستان</h2>
+            <p className="text-sm text-gray-500 mb-3">کد خود را با دوستانتان به اشتراک بگذارید و با اولین خرید آن‌ها امتیاز پاداش بگیرید.</p>
+            <div className="flex items-center gap-2">
+              <span className="flex-1 font-mono font-bold text-center bg-gray-50 border border-gray-200 rounded-xl py-2 tracking-widest text-blue-600" dir="ltr">
+                {referralInfo.referralCode}
+              </span>
+              <button onClick={handleCopyReferralCode} className="px-4 py-2 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-xl font-bold text-sm transition-colors">
+                کپی
+              </button>
+            </div>
+            <p className="text-xs text-gray-400 mt-2">
+              {toPersianDigits(referralInfo.referredCount)} نفر با این کد ثبت‌نام کرده‌اند — {toPersianDigits(referralInfo.rewardedCount)} نفر پاداش را فعال کرده‌اند
+            </p>
+          </div>
+        )}
 
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
           <h2 className="font-bold text-gray-900 mb-3">سفارش‌های اخیر</h2>

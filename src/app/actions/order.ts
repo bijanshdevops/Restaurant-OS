@@ -144,6 +144,7 @@ export async function createOrder(cartItems: CartItem[], customerId?: string, br
           totalAmount,
           pointsRedeemed: 0,
           pointsPerTenThousand: settings?.loyaltyPointsPerTenThousand ?? 1,
+          referralBonusPoints: settings?.referralBonusPoints ?? 0,
         });
       }
 
@@ -317,6 +318,7 @@ export async function getMyOnlineOrder(orderId: string) {
         items: { include: { menuItem: true } },
         payment: true,
         courier: true,
+        feedback: true,
       },
     });
     if (!order) return { success: false, error: 'سفارش یافت نشد' };
@@ -400,6 +402,7 @@ export async function finalizeOnlineOrderAfterPayment(orderId: string) {
         totalAmount: order.totalAmount,
         pointsRedeemed: order.pointsRedeemed,
         pointsPerTenThousand: settings?.loyaltyPointsPerTenThousand ?? 1,
+        referralBonusPoints: settings?.referralBonusPoints ?? 0,
       });
     }
 

@@ -8,6 +8,12 @@
  */
 export interface SmsProvider {
   sendOtp(phone: string, code: string): Promise<void>;
+  /**
+   * Sends an arbitrary free-text message (welcome messages, marketing
+   * campaigns, ...). Separate from sendOtp because a real gateway may use a
+   * different template/route for transactional vs. marketing traffic.
+   */
+  sendText(phone: string, message: string): Promise<void>;
 }
 
 class ConsoleSmsProvider implements SmsProvider {
@@ -16,6 +22,12 @@ class ConsoleSmsProvider implements SmsProvider {
     // only logged server-side. It is also returned to the client by the
     // requestOtp action, but ONLY outside production (see customerAuth.ts).
     console.log(`[sms:dev] OTP for ${phone}: ${code}`);
+  }
+
+  async sendText(phone: string, message: string): Promise<void> {
+    // Same dev-mode fallback as sendOtp: no real gateway configured yet, so
+    // welcome/campaign messages are only logged server-side for now.
+    console.log(`[sms:dev] Text for ${phone}: ${message}`);
   }
 }
 

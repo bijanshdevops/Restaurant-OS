@@ -19,6 +19,16 @@ export function pointsForAmount(amountToman: number, pointsPerTenThousand: numbe
   return Math.floor((amountToman / 10_000) * pointsPerTenThousand);
 }
 
+/** Generates a short, human-shareable referral code, e.g. "REF-8K3QZP". */
+export function generateReferralCode(): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I ambiguity
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return `REF-${code}`;
+}
+
 interface AwardLoyaltyParams {
   customerId: string;
   orderId: string;
@@ -26,6 +36,8 @@ interface AwardLoyaltyParams {
   totalAmount: number;
   pointsRedeemed: number;
   pointsPerTenThousand: number;
+  /** Bonus points granted to the referrer on the referred customer's first order (0 disables). */
+  referralBonusPoints?: number;
 }
 
 /**
@@ -44,13 +56,14 @@ export async function awardLoyaltyForOrder(
   tx: Prisma.TransactionClient,
   params: AwardLoyaltyParams
 ): Promise<number> {
-  const { customerId, orderId, orderNumber, totalAmount, pointsRedeemed, pointsPerTenThousand } = params;
+  const { customerId, orderId, orderNumber, totalAmount, pointsRedeemed, pointsPerTenThousand, referralBonusPoints } = params;
 
   const customer = await tx.customer.findUnique({ where: { id: customerId } });
   if (!customer) return 0;
 
   const pointsEarned = pointsForAmount(totalAmount, pointsPerTenThousand);
   const newTotalSpent = customer.totalSpent + totalAmount;
+  const isFirstOrder = customer.totalOrders === 0;
 
   await tx.customer.update({
     where: { id: customerId },
@@ -61,6 +74,38 @@ export async function awardLoyaltyForOrder(
       loyaltyTier: tierForLifetimeSpend(newTotalSpent),
     },
   });
+
+  // --- Phase 6: referral program ---
+  // اگر این اولین سفارش مشتری است و او با کد معرفیِ یک مشتری دیگر ثبت‌نام
+  // کرده، به معرفی‌کننده یک‌بار پاداز امتیازی تعلق می‌گیرد. isFirstOrder از
+  // روی totalOrders قبل از increment بالا محاسبه شده، پس این شرط دقیقاً یک
+  // بار در طول عمر مشتریِ معرفی‌شده true می‌شود؛ فلگ referralRewardGranted
+  // هم به‌عنوان یک لایه‌ی محافظتی اضافه (در برابر فراخوانی دوباره، مثلاً یک
+  // callback تکراری درگاه پرداخت) نگه داشته می‌شود.
+  if (
+    isFirstOrder &&
+    customer.referredByCustomerId &&
+    !customer.referralRewardGranted &&
+    referralBonusPoints &&
+    referralBonusPoints > 0
+  ) {
+    await tx.customer.update({
+      where: { id: customer.referredByCustomerId },
+      data: { pointsBalance: { increment: referralBonusPoints } },
+    });
+    await tx.loyaltyTransaction.create({
+      data: {
+        customerId: customer.referredByCustomerId,
+        type: 'EARNED',
+        points: referralBonusPoints,
+        description: `پاداش معرفی مشتری جدید (اولین سفارش ${orderNumber})`,
+      },
+    });
+    await tx.customer.update({
+      where: { id: customerId },
+      data: { referralRewardGranted: true },
+    });
+  }
 
   if (pointsRedeemed > 0) {
     await tx.loyaltyTransaction.create({

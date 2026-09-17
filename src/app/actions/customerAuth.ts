@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma';
 import { PasswordHasher } from '@/shared/infrastructure/security/PasswordHasher';
 import { createCustomerSession, destroyCustomerSession, requireCustomer } from '@/lib/customerAuth';
 import { getSmsProvider } from '@/lib/sms';
+import { generateReferralCode } from '@/lib/loyalty';
 
 const OTP_TTL_MS = 2 * 60 * 1000; // 2 minutes
 const OTP_RESEND_COOLDOWN_MS = 60 * 1000; // 1 minute between requests
@@ -69,7 +70,7 @@ export async function requestOtp(rawPhone: string) {
   }
 }
 
-export async function verifyOtp(rawPhone: string, code: string, fullName?: string) {
+export async function verifyOtp(rawPhone: string, code: string, fullName?: string, referralCode?: string) {
   const phone = normalizePhone(rawPhone);
   if (!phone) {
     return { success: false, error: 'شماره موبایل معتبر نیست' };
@@ -104,12 +105,29 @@ export async function verifyOtp(rawPhone: string, code: string, fullName?: strin
 
     let customer = await prisma.customer.findUnique({ where: { phone } });
     if (!customer) {
+      // اگر کد معرفیِ معتبری وارد شده، مشتریِ صاحب آن کد را پیدا کن (نمی‌تواند
+      // خودش باشد چون هنوز رکوردی برایش نداریم). کد نامعتبر فقط نادیده گرفته
+      // می‌شود — هرگز باعث شکست ثبت‌نام نمی‌شود.
+      let referredByCustomerId: string | undefined;
+      if (referralCode?.trim()) {
+        const referrer = await prisma.customer.findUnique({ where: { referralCode: referralCode.trim() } });
+        if (referrer) referredByCustomerId = referrer.id;
+      }
+
       customer = await prisma.customer.create({
         data: {
           phone,
           fullName: fullName?.trim() || 'مشتری',
+          referralCode: generateReferralCode(),
+          referredByCustomerId,
         },
       });
+
+      // پیام خوشامدگویی — یک پیامک تراکنشیِ یک‌بار، صرف‌نظر از تنظیم
+      // marketingOptIn (که فقط کمپین‌های بازاریابی را کنترل می‌کند).
+      getSmsProvider()
+        .sendText(phone, `${customer.fullName} عزیز، به باشگاه مشتریان ما خوش آمدید! کد معرفی شما: ${customer.referralCode}`)
+        .catch((err) => console.error('Error sending welcome SMS:', err));
     }
 
     await createCustomerSession({
@@ -150,5 +168,42 @@ export async function getCustomerProfile() {
   } catch (error) {
     console.error('Error fetching customer profile:', error);
     return { success: false, error: 'خطا در دریافت اطلاعات' };
+  }
+}
+
+/**
+ * کد معرفی خودِ مشتریِ واردشده را برمی‌گرداند (اگر نداشت، همین‌جا برایش
+ * می‌سازد — مشتریانی که پیش از این فاز ثبت‌نام کرده‌اند کد ندارند) به‌همراه
+ * تعداد دوستانی که با این کد ثبت‌نام کرده‌اند.
+ */
+export async function getMyReferralInfo() {
+  const auth = await requireCustomer();
+  if (!auth.ok) return { success: false, error: auth.error };
+
+  try {
+    let customer = await prisma.customer.findUnique({ where: { id: auth.customer.id } });
+    if (!customer) return { success: false, error: 'مشتری یافت نشد' };
+
+    if (!customer.referralCode) {
+      customer = await prisma.customer.update({
+        where: { id: customer.id },
+        data: { referralCode: generateReferralCode() },
+      });
+    }
+
+    const referredCount = await prisma.customer.count({ where: { referredByCustomerId: customer.id } });
+    const rewardedCount = await prisma.customer.count({
+      where: { referredByCustomerId: customer.id, referralRewardGranted: true },
+    });
+
+    return {
+      success: true,
+      referralCode: customer.referralCode,
+      referredCount,
+      rewardedCount,
+    };
+  } catch (error) {
+    console.error('Error fetching referral info:', error);
+    return { success: false, error: 'خطا در دریافت اطلاعات معرفی' };
   }
 }

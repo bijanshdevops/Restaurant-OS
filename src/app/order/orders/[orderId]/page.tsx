@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { getMyOnlineOrder } from '@/app/actions/order';
+import { submitOrderFeedback } from '@/app/actions/feedback';
 import { formatCurrency, formatDate, toPersianDigits } from '@/shared/utils/formatters';
 
 const STATUS_LABELS: Record<string, string> = {
@@ -30,6 +31,9 @@ export default function OrderTrackingPage() {
   const [order, setOrder] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
+  const [feedbackRating, setFeedbackRating] = useState(5);
+  const [feedbackComment, setFeedbackComment] = useState('');
+  const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false);
 
   useEffect(() => {
     const fetchOrder = async () => {
@@ -42,6 +46,17 @@ export default function OrderTrackingPage() {
     const interval = setInterval(fetchOrder, 10000);
     return () => clearInterval(interval);
   }, [orderId]);
+
+  const handleSubmitFeedback = async () => {
+    setIsSubmittingFeedback(true);
+    const res = await submitOrderFeedback(orderId, feedbackRating, feedbackComment);
+    setIsSubmittingFeedback(false);
+    if (res.success && res.feedback) {
+      setOrder({ ...order, feedback: res.feedback });
+    } else {
+      alert(res.error || 'خطا در ثبت بازخورد');
+    }
+  };
 
   if (isLoading) {
     return <div className="min-h-screen flex items-center justify-center font-sans">درحال بارگذاری...</div>;
@@ -87,6 +102,43 @@ export default function OrderTrackingPage() {
           <span>مبلغ پرداخت‌شده</span>
           <span>{formatCurrency(order.totalAmount)}</span>
         </div>
+
+        {order.status === 'COMPLETED' && (
+          <div className="border-t border-gray-100 pt-4">
+            {order.feedback ? (
+              <div className="bg-amber-50 border border-amber-100 rounded-xl p-4 text-center">
+                <p className="text-amber-600 font-bold text-lg">{'★'.repeat(order.feedback.rating)}{'☆'.repeat(5 - order.feedback.rating)}</p>
+                {order.feedback.comment && <p className="text-sm text-gray-600 mt-2">{order.feedback.comment}</p>}
+                <p className="text-xs text-gray-400 mt-1">بابت بازخوردتان ممنونیم!</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <p className="font-bold text-gray-900 text-sm">نظر شما درباره‌ی این سفارش چیست؟</p>
+                <div className="flex justify-center gap-1 text-2xl" dir="ltr">
+                  {[1, 2, 3, 4, 5].map((n) => (
+                    <button key={n} onClick={() => setFeedbackRating(n)} className={n <= feedbackRating ? 'text-amber-500' : 'text-gray-300'}>
+                      ★
+                    </button>
+                  ))}
+                </div>
+                <textarea
+                  value={feedbackComment}
+                  onChange={(e) => setFeedbackComment(e.target.value)}
+                  rows={2}
+                  placeholder="نظر شما (اختیاری)..."
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-500"
+                />
+                <button
+                  onClick={handleSubmitFeedback}
+                  disabled={isSubmittingFeedback}
+                  className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold text-sm transition-colors disabled:opacity-60"
+                >
+                  {isSubmittingFeedback ? 'در حال ثبت...' : 'ثبت بازخورد'}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         <button
           onClick={() => router.push('/order')}

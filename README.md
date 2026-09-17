@@ -406,6 +406,30 @@ Covered end-to-end by `tests/auditLog.test.ts`.
 
 ---
 
+## Waitlist & Reservation Deposits (Phase 12)
+
+Two related, but deliberately separate, additions on top of the existing table/reservation model, both scoped to `ADMIN` + `CASHIER` access — the same access model as reservations already had.
+
+### Waitlist
+
+A new `WaitlistEntry` model for **walk-in** guests who are physically present right now but have neither a future time nor a pre-assigned table — which is exactly what distinguishes it from `Reservation`. Entries move through `WAITING → SEATED` or `WAITING → CANCELLED` (`WaitlistStatus`). Seating a waitlist entry (`seatFromWaitlist`) assigns it a table and mirrors the same table-status-sync logic `updateReservationStatus` already uses for its `SEATED` branch (the table becomes `OCCUPIED`), inside one `$transaction` for atomicity. `getWaitlist` only returns entries still `WAITING`.
+
+### Reservation deposits
+
+`Reservation` gained two fields: `depositAmount` (default `0`) and `depositRefundedAt`. A deposit is staff-entered at `createReservation` time (this is a manual/cash flow — there is no payment-gateway integration here) and, when greater than zero, creates a real `INCOME` transaction in the same `$transaction` as the reservation itself, using a dedicated system category (`INCOME_RESERVATION_DEPOSIT`) and `referenceType: 'RESERVATION_DEPOSIT'` pointing back at the reservation.
+
+**Refunding a deposit is a separate, explicit staff action (`refundReservationDeposit`) — never automatic.** No `ReservationStatus` transition (cancelling, marking `NO_SHOW`, completing, etc.) triggers a refund on its own; a staff member must call the refund action directly. Per the confirmed policy for this phase, a refund is **always the full deposit amount, and can be issued at any time** — including after the reservation has already been cancelled or marked as a no-show — with no penalty tiers or time-based proration. A refund creates an offsetting `EXPENSE` transaction (`EXPENSE_RESERVATION_DEPOSIT_REFUND` category, `referenceType: 'RESERVATION_DEPOSIT_REFUND'`) for the full amount; the original `INCOME` transaction from the deposit is never edited or deleted (the same "reference-backed transactions are permanent" rule Phase 7 and the Phase 10 refund flow already follow). A reservation can only be refunded once — a second attempt, or an attempt on a reservation with no deposit, is rejected.
+
+### Known scope decisions (disclosed)
+
+- **Deposit collection and refund are not logged in the Phase 11 audit log.** That phase's "sensitive events" list was locked in before this phase existed, and expanding it was out of scope here.
+- **No cancellation-penalty tiers.** The confirmed policy is a full, unconditional refund at any time — this was a deliberate choice, not an oversight.
+- **No customer-facing waitlist view.** Joining/seating/cancelling the waitlist is staff-only, matching the reservation model's existing access pattern.
+
+Covered end-to-end by `tests/waitlistDeposits.test.ts`.
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, review process, and branching model.

@@ -7,7 +7,14 @@ import {
   getReservations,
   createReservation,
   updateReservationStatus,
+  refundReservationDeposit,
 } from '@/app/actions/reservation';
+import {
+  getWaitlist,
+  joinWaitlist,
+  seatFromWaitlist,
+  cancelWaitlistEntry,
+} from '@/app/actions/waitlist';
 import { TableStatus, ReservationStatus } from '@prisma/client';
 
 interface TableRow {
@@ -27,6 +34,17 @@ interface ReservationRow {
   status: ReservationStatus;
   notes: string;
   table: { number: number };
+  depositAmount: number;
+  depositRefundedAt: Date | null;
+}
+
+interface WaitlistRow {
+  id: string;
+  guestName: string;
+  guestPhone: string;
+  partySize: number;
+  notes: string;
+  createdAt: Date;
 }
 
 const toPersianDigits = (num: number | string) => {
@@ -69,9 +87,13 @@ const reservationStatusClass: Record<ReservationStatus, string> = {
 export default function ReservationsPage() {
   const [tables, setTables] = useState<TableRow[]>([]);
   const [reservations, setReservations] = useState<ReservationRow[]>([]);
+  const [waitlist, setWaitlist] = useState<WaitlistRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isTableModalOpen, setIsTableModalOpen] = useState(false);
+  const [isWaitlistModalOpen, setIsWaitlistModalOpen] = useState(false);
+  const [seatingEntryId, setSeatingEntryId] = useState<string | null>(null);
+  const [seatTableId, setSeatTableId] = useState('');
   const [formError, setFormError] = useState('');
 
   const [formData, setFormData] = useState({
@@ -82,19 +104,27 @@ export default function ReservationsPage() {
     reservationDate: '',
     reservationHour: '',
     notes: '',
+    depositAmount: '',
   });
 
   const [tableForm, setTableForm] = useState({ number: '', capacity: '4' });
 
+  const [waitlistForm, setWaitlistForm] = useState({ guestName: '', guestPhone: '', partySize: 2, notes: '' });
+
   const loadData = useCallback(async () => {
     setIsLoading(true);
-    const [tablesRes, reservationsRes] = await Promise.all([getTables(), getReservations()]);
+    const [tablesRes, reservationsRes, waitlistRes] = await Promise.all([getTables(), getReservations(), getWaitlist()]);
     if (tablesRes.success && tablesRes.tables) {
       setTables(tablesRes.tables as any);
     }
     if (reservationsRes.success && reservationsRes.reservations) {
       setReservations(
         (reservationsRes.reservations as any[]).map(r => ({ ...r, reservationTime: new Date(r.reservationTime) }))
+      );
+    }
+    if (waitlistRes.success && waitlistRes.entries) {
+      setWaitlist(
+        (waitlistRes.entries as any[]).map(w => ({ ...w, createdAt: new Date(w.createdAt) }))
       );
     }
     setIsLoading(false);
@@ -113,6 +143,7 @@ export default function ReservationsPage() {
       return;
     }
     const reservationTime = new Date(`${formData.reservationDate}T${formData.reservationHour}:00`);
+    const depositAmount = formData.depositAmount ? Number(formData.depositAmount) : 0;
     const res = await createReservation({
       tableId: formData.tableId,
       guestName: formData.guestName,
@@ -120,13 +151,61 @@ export default function ReservationsPage() {
       partySize: Number(formData.partySize),
       reservationTime,
       notes: formData.notes,
+      depositAmount,
     });
     if (res.success) {
       setIsModalOpen(false);
-      setFormData({ tableId: '', guestName: '', guestPhone: '', partySize: 2, reservationDate: '', reservationHour: '', notes: '' });
+      setFormData({ tableId: '', guestName: '', guestPhone: '', partySize: 2, reservationDate: '', reservationHour: '', notes: '', depositAmount: '' });
       loadData();
     } else {
       setFormError(res.error || 'خطا در ثبت رزرو');
+    }
+  };
+
+  const handleRefundDeposit = async (id: string) => {
+    if (!confirm('آیا از بازگرداندن کامل پیش‌پرداخت این رزرو مطمئن هستید؟')) return;
+    const res = await refundReservationDeposit(id);
+    if (res.success) {
+      loadData();
+    } else {
+      alert(res.error || 'خطا در بازگرداندن پیش‌پرداخت');
+    }
+  };
+
+  const handleJoinWaitlist = async () => {
+    setFormError('');
+    if (!waitlistForm.guestName || !waitlistForm.guestPhone) {
+      setFormError('نام و شماره تماس الزامی است.');
+      return;
+    }
+    const res = await joinWaitlist(waitlistForm);
+    if (res.success) {
+      setIsWaitlistModalOpen(false);
+      setWaitlistForm({ guestName: '', guestPhone: '', partySize: 2, notes: '' });
+      loadData();
+    } else {
+      setFormError(res.error || 'خطا در ثبت در لیست انتظار');
+    }
+  };
+
+  const handleSeatFromWaitlist = async () => {
+    if (!seatingEntryId || !seatTableId) return;
+    const res = await seatFromWaitlist(seatingEntryId, seatTableId);
+    if (res.success) {
+      setSeatingEntryId(null);
+      setSeatTableId('');
+      loadData();
+    } else {
+      alert(res.error || 'خطا در نشاندن مشتری');
+    }
+  };
+
+  const handleCancelWaitlist = async (id: string) => {
+    const res = await cancelWaitlistEntry(id);
+    if (res.success) {
+      loadData();
+    } else {
+      alert(res.error || 'خطا در لغو مورد');
     }
   };
 
@@ -181,6 +260,12 @@ export default function ReservationsPage() {
             ➕ میز جدید
           </button>
           <button
+            onClick={() => setIsWaitlistModalOpen(true)}
+            className="bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold py-3 px-5 rounded-xl transition-all border border-amber-200"
+          >
+            ⏳ افزودن به لیست انتظار
+          </button>
+          <button
             onClick={() => setIsModalOpen(true)}
             className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-xl transition-all shadow-md hover:shadow-lg"
           >
@@ -223,6 +308,47 @@ export default function ReservationsPage() {
         )}
       </div>
 
+      <div className="bg-white shadow-sm border border-gray-200 rounded-2xl overflow-hidden">
+        <div className="px-6 py-5 border-b border-gray-100 bg-amber-50/50">
+          <h2 className="text-lg font-bold text-gray-800">لیست انتظار (حضوری)</h2>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-100 text-right">
+            <thead className="bg-white">
+              <tr>
+                <th className="px-6 py-4 text-sm font-bold text-gray-700">مشتری</th>
+                <th className="px-6 py-4 text-sm font-bold text-gray-700 text-center">نفرات</th>
+                <th className="px-6 py-4 text-sm font-bold text-gray-700">توضیحات</th>
+                <th className="px-6 py-4 text-sm font-bold text-gray-700">زمان ثبت</th>
+                <th className="px-6 py-4 text-sm font-bold text-gray-700 text-center">عملیات</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-50">
+              {waitlist.map(w => (
+                <tr key={w.id} className="hover:bg-gray-50/80 transition-colors">
+                  <td className="px-6 py-4">
+                    <div className="text-sm font-bold text-gray-900">{w.guestName}</div>
+                    <div className="text-xs text-gray-500 font-mono" dir="ltr">{w.guestPhone}</div>
+                  </td>
+                  <td className="px-6 py-4 text-center text-sm font-bold">{toPersianDigits(w.partySize)}</td>
+                  <td className="px-6 py-4 text-sm text-gray-600">{w.notes || '-'}</td>
+                  <td className="px-6 py-4 text-sm text-gray-600">{formatTime(w.createdAt)}</td>
+                  <td className="px-6 py-4 text-center text-xs font-bold space-x-1 space-x-reverse whitespace-nowrap">
+                    <button onClick={() => { setSeatingEntryId(w.id); setSeatTableId(''); }} className="text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2 py-1.5 rounded-lg border border-emerald-200">نشستن روی میز</button>
+                    <button onClick={() => handleCancelWaitlist(w.id)} className="text-red-700 bg-red-50 hover:bg-red-100 px-2 py-1.5 rounded-lg border border-red-200">لغو</button>
+                  </td>
+                </tr>
+              ))}
+              {waitlist.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="px-6 py-8 text-center text-gray-500 text-sm font-medium">لیست انتظار خالی است.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <div className="bg-white shadow-sm border border-gray-200 rounded-2xl overflow-hidden min-h-[300px]">
         <div className="px-6 py-5 border-b border-gray-100 bg-gray-50/50">
           <h2 className="text-lg font-bold text-gray-800">لیست رزروها</h2>
@@ -236,6 +362,7 @@ export default function ReservationsPage() {
                 <th className="px-6 py-4 text-sm font-bold text-gray-700 text-center">نفرات</th>
                 <th className="px-6 py-4 text-sm font-bold text-gray-700">زمان</th>
                 <th className="px-6 py-4 text-sm font-bold text-gray-700 text-center">وضعیت</th>
+                <th className="px-6 py-4 text-sm font-bold text-gray-700 text-center">پیش‌پرداخت</th>
                 <th className="px-6 py-4 text-sm font-bold text-gray-700 text-center">عملیات</th>
               </tr>
             </thead>
@@ -253,6 +380,20 @@ export default function ReservationsPage() {
                     <span className={`px-3 py-1 inline-flex text-xs leading-5 font-bold rounded-full border ${reservationStatusClass[r.status]}`}>
                       {reservationStatusLabel[r.status]}
                     </span>
+                  </td>
+                  <td className="px-6 py-4 text-center text-xs">
+                    {r.depositAmount > 0 ? (
+                      <div className="space-y-1">
+                        <div className="font-bold text-gray-700">{toPersianDigits(r.depositAmount)} تومان</div>
+                        {r.depositRefundedAt ? (
+                          <span className="px-2 py-0.5 inline-flex text-[11px] font-bold rounded-full border bg-gray-100 text-gray-600 border-gray-200">بازگردانده‌شده</span>
+                        ) : (
+                          <button onClick={() => handleRefundDeposit(r.id)} className="text-amber-700 bg-amber-50 hover:bg-amber-100 px-2 py-1 rounded-lg border border-amber-200 font-bold">بازگرداندن پیش‌پرداخت</button>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-gray-400">-</span>
+                    )}
                   </td>
                   <td className="px-6 py-4 text-center text-xs font-bold space-x-1 space-x-reverse whitespace-nowrap">
                     {r.status === 'PENDING' && (
@@ -272,7 +413,7 @@ export default function ReservationsPage() {
               ))}
               {reservations.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-6 py-10 text-center text-gray-500 text-sm font-medium">هیچ رزروی ثبت نشده است.</td>
+                  <td colSpan={7} className="px-6 py-10 text-center text-gray-500 text-sm font-medium">هیچ رزروی ثبت نشده است.</td>
                 </tr>
               )}
             </tbody>
@@ -334,6 +475,12 @@ export default function ReservationsPage() {
                 <textarea value={formData.notes} onChange={e => setFormData({ ...formData, notes: e.target.value })}
                   className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm outline-none focus:border-indigo-500" rows={2} />
               </div>
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-1">پیش‌پرداخت (تومان) <span className="text-gray-400 font-normal">— اختیاری</span></label>
+                <input type="number" min={0} value={formData.depositAmount} onChange={e => setFormData({ ...formData, depositAmount: e.target.value })}
+                  className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm outline-none focus:border-indigo-500" placeholder="۰" />
+                <p className="text-xs text-gray-400 mt-1">در صورت وارد کردن مبلغ، به‌صورت خودکار به‌عنوان درآمد ثبت می‌شود.</p>
+              </div>
             </div>
             <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3 bg-gray-50 mt-auto">
               <button onClick={() => setIsModalOpen(false)} className="px-5 py-2.5 text-sm font-bold text-gray-600 bg-white border border-gray-300 rounded-xl hover:bg-gray-100">انصراف</button>
@@ -366,6 +513,74 @@ export default function ReservationsPage() {
             <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3 bg-gray-50">
               <button onClick={() => setIsTableModalOpen(false)} className="px-5 py-2.5 text-sm font-bold text-gray-600 bg-white border border-gray-300 rounded-xl hover:bg-gray-100">انصراف</button>
               <button onClick={handleCreateTable} className="px-5 py-2.5 text-sm font-bold text-white bg-gray-800 rounded-xl hover:bg-gray-900 shadow-sm">افزودن میز</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isWaitlistModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden flex flex-col border border-gray-100">
+            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-amber-50">
+              <h2 className="text-lg font-bold text-amber-900">⏳ افزودن به لیست انتظار</h2>
+              <button onClick={() => setIsWaitlistModalOpen(false)} className="text-amber-400 hover:text-amber-700 text-2xl leading-none">&times;</button>
+            </div>
+            <div className="p-6 space-y-4">
+              {formError && <div className="bg-red-50 text-red-700 text-sm font-bold p-3 rounded-lg border border-red-200">{formError}</div>}
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-1">نام مشتری <span className="text-red-500">*</span></label>
+                <input type="text" value={waitlistForm.guestName} onChange={e => setWaitlistForm({ ...waitlistForm, guestName: e.target.value })}
+                  className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm outline-none focus:border-amber-500" placeholder="مثال: علی رضایی" />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-1">شماره تماس <span className="text-red-500">*</span></label>
+                <input type="text" value={waitlistForm.guestPhone} onChange={e => setWaitlistForm({ ...waitlistForm, guestPhone: e.target.value })}
+                  className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm outline-none focus:border-amber-500 text-left font-mono" dir="ltr" placeholder="09123456789" />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-1">تعداد نفرات</label>
+                <input type="number" min={1} value={waitlistForm.partySize} onChange={e => setWaitlistForm({ ...waitlistForm, partySize: Number(e.target.value) })}
+                  className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm outline-none focus:border-amber-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-1">توضیحات</label>
+                <textarea value={waitlistForm.notes} onChange={e => setWaitlistForm({ ...waitlistForm, notes: e.target.value })}
+                  className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm outline-none focus:border-amber-500" rows={2} />
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3 bg-gray-50">
+              <button onClick={() => setIsWaitlistModalOpen(false)} className="px-5 py-2.5 text-sm font-bold text-gray-600 bg-white border border-gray-300 rounded-xl hover:bg-gray-100">انصراف</button>
+              <button onClick={handleJoinWaitlist} className="px-5 py-2.5 text-sm font-bold text-white bg-amber-600 rounded-xl hover:bg-amber-700 shadow-sm">افزودن</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {seatingEntryId && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden flex flex-col border border-gray-100">
+            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-emerald-50">
+              <h2 className="text-lg font-bold text-emerald-900">نشاندن روی میز</h2>
+              <button onClick={() => setSeatingEntryId(null)} className="text-emerald-400 hover:text-emerald-700 text-2xl leading-none">&times;</button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-1">میز</label>
+                <select
+                  value={seatTableId}
+                  onChange={e => setSeatTableId(e.target.value)}
+                  className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm outline-none focus:border-emerald-500"
+                >
+                  <option value="">انتخاب میز...</option>
+                  {tables.filter(t => t.status === 'AVAILABLE').map(t => (
+                    <option key={t.id} value={t.id}>میز {t.number} (ظرفیت {t.capacity} نفر)</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3 bg-gray-50">
+              <button onClick={() => setSeatingEntryId(null)} className="px-5 py-2.5 text-sm font-bold text-gray-600 bg-white border border-gray-300 rounded-xl hover:bg-gray-100">انصراف</button>
+              <button onClick={handleSeatFromWaitlist} className="px-5 py-2.5 text-sm font-bold text-white bg-emerald-600 rounded-xl hover:bg-emerald-700 shadow-sm">نشاندن</button>
             </div>
           </div>
         </div>

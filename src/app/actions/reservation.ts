@@ -3,6 +3,7 @@
 import { prisma } from '@/lib/prisma';
 import { requireRole, resolveBranchFilter, resolveBranchForCreate, isBranchExempt } from '@/lib/auth';
 import { ReservationStatus, TableStatus } from '@prisma/client';
+import { SYSTEM_CATEGORY_IDS } from '@/lib/accountingCategories';
 
 // ---------- Tables ----------
 
@@ -111,6 +112,8 @@ interface CreateReservationInput {
   reservationTime: Date;
   customerId?: string;
   notes?: string;
+  /** پیش‌پرداختِ اختیاری دریافت‌شده در همان لحظه‌ی ثبت رزرو (۰ یا نامشخص = بدون پیش‌پرداخت). */
+  depositAmount?: number;
 }
 
 export async function createReservation(input: CreateReservationInput) {
@@ -156,23 +159,107 @@ export async function createReservation(input: CreateReservationInput) {
       return { success: false, error: 'این میز در این بازه زمانی قبلاً رزرو شده است' };
     }
 
-    const reservation = await prisma.reservation.create({
-      data: {
-        tableId: input.tableId,
-        branchId: table.branchId,
-        guestName: input.guestName.trim(),
-        guestPhone: input.guestPhone.trim(),
-        partySize: input.partySize,
-        reservationTime,
-        customerId: input.customerId || null,
-        notes: input.notes?.trim() || '',
-      },
+    const depositAmount = input.depositAmount ?? 0;
+    if (!Number.isFinite(depositAmount) || depositAmount < 0) {
+      return { success: false, error: 'مبلغ پیش‌پرداخت نامعتبر است' };
+    }
+
+    const reservation = await prisma.$transaction(async (tx) => {
+      const created = await tx.reservation.create({
+        data: {
+          tableId: input.tableId,
+          branchId: table.branchId,
+          guestName: input.guestName.trim(),
+          guestPhone: input.guestPhone.trim(),
+          partySize: input.partySize,
+          reservationTime,
+          customerId: input.customerId || null,
+          notes: input.notes?.trim() || '',
+          depositAmount,
+        },
+      });
+
+      // پیش‌پرداخت (Phase 12) یک درآمد واقعی است — درست مثل هر تراکنش خودکار
+      // دیگر (سفارش/خرید/حقوق)، در حسابداری با دسته‌ی سیستمی مخصوص خودش و
+      // referenceType/referenceId به همین رزرو، ثبت می‌شود.
+      if (depositAmount > 0) {
+        await tx.transaction.create({
+          data: {
+            type: 'INCOME',
+            description: `پیش‌پرداخت رزرو ${created.guestName} (میز ${table.number})`,
+            amount: depositAmount,
+            branchId: table.branchId,
+            categoryId: SYSTEM_CATEGORY_IDS.INCOME_RESERVATION_DEPOSIT,
+            referenceType: 'RESERVATION_DEPOSIT',
+            referenceId: created.id,
+            createdByUserId: auth.user.id,
+          },
+        });
+      }
+
+      return created;
     });
 
     return { success: true, reservation };
   } catch (error) {
     console.error('Error creating reservation:', error);
     return { success: false, error: 'خطا در ثبت رزرو' };
+  }
+}
+
+/**
+ * بازگرداندنِ کامل پیش‌پرداختِ یک رزرو — یک اقدام صریح پرسنل، قابل انجام
+ * «در هر زمان» (طبق سیاست انتخاب‌شده‌ی این فاز)، صرف‌نظر از وضعیت فعلی رزرو
+ * (لغوشده، عدم‌حضور، یا حتی هنوز فعال). هیچ جریمه/تسهیم زمانی اعمال نمی‌شود؛
+ * کل مبلغ در یک تراکنش EXPENSEِ مقابل ثبت می‌شود، بدون آنکه تراکنش INCOME
+ * اصلی پیش‌پرداخت (طبق قاعده‌ی فاز ۷) حذف یا ویرایش شود.
+ */
+export async function refundReservationDeposit(reservationId: string) {
+  const auth = await requireRole('ADMIN', 'CASHIER');
+  if (!auth.ok) return { success: false, error: auth.error };
+
+  try {
+    const reservation = await prisma.reservation.findUnique({
+      where: { id: reservationId },
+      include: { table: { select: { number: true } } },
+    });
+    if (!reservation) return { success: false, error: 'رزرو یافت نشد' };
+    if (!isBranchExempt(auth.user) && reservation.branchId !== auth.user.branchId) {
+      return { success: false, error: 'دسترسی غیرمجاز' };
+    }
+    if (reservation.depositAmount <= 0) {
+      return { success: false, error: 'این رزرو پیش‌پرداختی برای استرداد ندارد' };
+    }
+    if (reservation.depositRefundedAt) {
+      return { success: false, error: 'پیش‌پرداخت این رزرو قبلاً بازگردانده شده است' };
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const result = await tx.reservation.update({
+        where: { id: reservationId },
+        data: { depositRefundedAt: new Date() },
+      });
+
+      await tx.transaction.create({
+        data: {
+          type: 'EXPENSE',
+          description: `استرداد پیش‌پرداخت رزرو ${reservation.guestName} (میز ${reservation.table.number})`,
+          amount: reservation.depositAmount,
+          branchId: reservation.branchId,
+          categoryId: SYSTEM_CATEGORY_IDS.EXPENSE_RESERVATION_DEPOSIT_REFUND,
+          referenceType: 'RESERVATION_DEPOSIT_REFUND',
+          referenceId: reservationId,
+          createdByUserId: auth.user.id,
+        },
+      });
+
+      return result;
+    });
+
+    return { success: true, reservation: updated };
+  } catch (error) {
+    console.error('Error refunding reservation deposit:', error);
+    return { success: false, error: 'خطا در بازگرداندن پیش‌پرداخت' };
   }
 }
 

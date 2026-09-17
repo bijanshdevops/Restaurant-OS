@@ -11,7 +11,8 @@ import {
   finalizeOnlineOrderAfterPayment,
   markOnlineOrderPaymentFailed,
 } from '@/app/actions/order';
-import { getTables, createTable, updateTableStatus, createReservation, getReservations, updateReservationStatus } from '@/app/actions/reservation';
+import { getTables, createTable, updateTableStatus, createReservation, getReservations, updateReservationStatus, refundReservationDeposit } from '@/app/actions/reservation';
+import { getWaitlist, joinWaitlist, seatFromWaitlist, cancelWaitlistEntry } from '@/app/actions/waitlist';
 import { getSettings, updateSettings, updateModianSettings, getPublicOrderSettings } from '@/app/actions/settings';
 import { getUsers } from '@/app/actions/user';
 import {
@@ -127,6 +128,11 @@ const actions: Record<string, (...args: any[]) => Promise<any>> = {
   createReservation,
   getReservations,
   updateReservationStatus,
+  refundReservationDeposit,
+  getWaitlist,
+  joinWaitlist,
+  seatFromWaitlist,
+  cancelWaitlistEntry,
   getSettings,
   updateSettings,
   updateModianSettings,

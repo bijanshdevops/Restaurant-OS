@@ -17,4 +17,7 @@ export const SYSTEM_CATEGORY_IDS = {
   EXPENSE_OTHER: 'txcat-expense-other',
   // --- Phase 10: refunds & returns ---
   EXPENSE_REFUND: 'txcat-expense-refund',
+  // --- Phase 12: waitlist & reservation deposits ---
+  INCOME_RESERVATION_DEPOSIT: 'txcat-income-reservation-deposit',
+  EXPENSE_RESERVATION_DEPOSIT_REFUND: 'txcat-expense-reservation-deposit-refund',
 } as const;

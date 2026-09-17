@@ -355,6 +355,9 @@ model Table {
   orders       Order[]
   reservations Reservation[]
 
+  // --- Phase 12: waitlist & reservation deposits ---
+  waitlistEntries WaitlistEntry[]
+
   // --- Phase 5: multi-branch support ---
   // شماره‌ی میز فقط در محدوده‌ی هر شعبه یکتاست، نه در کل سیستم (هر شعبه
   // می‌تواند میز شماره ۱ خودش را داشته باشد).
@@ -390,6 +393,14 @@ model Reservation {
   // --- Phase 5: multi-branch support --- (denormalized from table.branchId at creation, for direct filtering)
   branchId String
   branch   Branch @relation(fields: [branchId], references: [id])
+
+  // --- Phase 12: reservation deposits ---
+  // مبلغ پیش‌پرداختِ دریافت‌شده هنگام ثبت رزرو (۰ یعنی بدون پیش‌پرداخت).
+  // سیاست استرداد این فاز «استرداد کامل، در هر زمان» است — یعنی هیچ جریمه‌ی
+  // زمان‌بندی‌شده‌ای برای لغو/عدم‌حضور اعمال نمی‌شود؛ استرداد یک اقدام صریح
+  // پرسنل است (refundReservationDeposit)، نه خودکار روی تغییر وضعیت رزرو.
+  depositAmount     Float     @default(0)
+  depositRefundedAt DateTime?
 }
 
 enum ReservationStatus {
@@ -762,6 +773,9 @@ model Branch {
   purchaseOrders  PurchaseOrder[]
   shifts          Shift[]
   inventoryStocks BranchInventoryStock[]
+
+  // --- Phase 12: waitlist & reservation deposits ---
+  waitlistEntries WaitlistEntry[]
 }
 
 
@@ -944,4 +958,39 @@ enum AuditAction {
   REFUND_CREATED
   SETTINGS_UPDATED
   PAYROLL_RUN
+}
+
+// =====================================================================
+// Phase 12: Waitlist & Reservation Deposits
+// =====================================================================
+
+// لیست انتظارِ حضوری (walk-in) — مستقل از Reservation، چون رزرو یک زمان
+// آینده‌ی مشخص و میزِ از‌پیش‌تخصیص‌یافته دارد، درحالی‌که مشتری در لیست
+// انتظار همین حالا حضور دارد و منتظر آزاد شدن میز است، بدون زمان یا میزِ
+// از‌پیش‌معلوم. دسترسی، مثل رزرو فعلی، ADMIN + CASHIER است.
+model WaitlistEntry {
+  id         String          @id @default(uuid())
+  guestName  String
+  guestPhone String
+  partySize  Int
+  notes      String          @default("")
+  status     WaitlistStatus  @default(WAITING)
+  createdAt  DateTime        @default(now())
+  seatedAt   DateTime?
+
+  // میزی که این مشتری روی آن نشانده شده (فقط بعد از seatFromWaitlist مقداردهی می‌شود).
+  tableId String?
+  table   Table?  @relation(fields: [tableId], references: [id])
+
+  // --- Phase 5: multi-branch support ---
+  branchId String
+  branch   Branch @relation(fields: [branchId], references: [id])
+
+  @@index([branchId, status])
+}
+
+enum WaitlistStatus {
+  WAITING
+  SEATED
+  CANCELLED
 }

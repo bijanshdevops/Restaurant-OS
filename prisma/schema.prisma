@@ -67,6 +67,9 @@ model MenuItem {
   orderItems  OrderItem[]
   recipeItems RecipeItem[]
 
+  // --- Phase 13: modifiers/add-ons, yield %, sub-recipes ---
+  modifierGroupLinks MenuItemModifierGroup[]
+
   // --- Phase 8: kitchen display system (KDS) ---
   // ایستگاه آشپزخانه‌ای که این آیتم باید در آن آماده شود (مثلاً «گریل»،
   // «سرد»، «دسر»)؛ یک برچسب متنی آزاد است، نه یک موجودیت مدیریت‌شده‌ی جدا.
@@ -155,6 +158,13 @@ model OrderItem {
   order    Order    @relation(fields: [orderId], references: [id])
   menuItem MenuItem @relation(fields: [menuItemId], references: [id])
 
+  // --- Phase 13: modifiers/add-ons + دقیقاً همان مقدار موجودیِ کسرشده در
+  // لحظه‌ی ثبت سفارش (بعد از اعمال درصد بازده، بسط زیرفرمول‌ها و
+  // مدیفایرهای انتخابی) — تا مرجوعی (refund.ts) همیشه دقیقاً همان مقدار را
+  // برگرداند، حتی اگر فرمول/مدیفایر/درصد بازده بعداً تغییر کند.
+  modifiers        OrderItemModifier[]
+  ingredientUsages OrderItemIngredientUsage[]
+
   // --- Phase 10: refunds & returns ---
   // مجموع تعدادی که تاکنون از همین ردیف سفارش مرجوع شده؛ هرگز نمی‌تواند از
   // quantity بیشتر شود. یک آیتم وقتی «کاملاً مرجوع‌شده» است که این مقدار با
@@ -179,6 +189,11 @@ model InventoryItem {
 
   // --- Phase 5: multi-branch support ---
   branchStocks BranchInventoryStock[]
+
+  // --- Phase 13: modifiers/add-ons, yield %, sub-recipes ---
+  modifierRecipeItems       ModifierRecipeItem[]
+  subRecipeItems            SubRecipeItem[]
+  orderItemIngredientUsages OrderItemIngredientUsage[]
 }
 
 model BranchInventoryStock {
@@ -197,16 +212,27 @@ model BranchInventoryStock {
   @@index([inventoryItemId])
 }
 
+// از فاز ۱۳ به بعد، هر ردیفِ فرمول یا مستقیماً به یک ماده‌ی اولیه‌ی خام
+// اشاره می‌کند (inventoryItemId) یا به یک زیرفرمول (subRecipeId) — دقیقاً
+// یکی از این دو، هرگز هر دو یا هیچ‌کدام (این محدودیت در سطح اکشن سرور
+// اعمال می‌شود، چون Prisma/Postgres محدودیت XOR ستونی بومی ندارد).
+// yieldPercent («درصد بازده» / معکوسِ درصد ضایعات) یعنی از هر واحدِ خامِ
+// خریداری‌شده، چند درصد واقعاً قابل استفاده در این فرمول است — مقدار
+// پیش‌فرض ۱۰۰ یعنی «بدون ضایعات»، دقیقاً همان رفتار قبل از این فاز.
 model RecipeItem {
-  id              String @id @default(uuid())
+  id              String  @id @default(uuid())
   menuItemId      String
-  inventoryItemId String
+  inventoryItemId String?
+  subRecipeId     String?
   quantity        Float
+  yieldPercent    Float   @default(100)
 
-  menuItem      MenuItem      @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
-  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  menuItem      MenuItem       @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  inventoryItem InventoryItem? @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  subRecipe     SubRecipe?     @relation(fields: [subRecipeId], references: [id], onDelete: Restrict)
 
   @@unique([menuItemId, inventoryItemId])
+  @@unique([menuItemId, subRecipeId])
 }
 
 model Customer {
@@ -778,7 +804,6 @@ model Branch {
   waitlistEntries WaitlistEntry[]
 }
 
-
 // =====================================================================
 // Phase 6: CRM & Marketing
 // =====================================================================
@@ -969,13 +994,13 @@ enum AuditAction {
 // انتظار همین حالا حضور دارد و منتظر آزاد شدن میز است، بدون زمان یا میزِ
 // از‌پیش‌معلوم. دسترسی، مثل رزرو فعلی، ADMIN + CASHIER است.
 model WaitlistEntry {
-  id         String          @id @default(uuid())
+  id         String         @id @default(uuid())
   guestName  String
   guestPhone String
   partySize  Int
-  notes      String          @default("")
-  status     WaitlistStatus  @default(WAITING)
-  createdAt  DateTime        @default(now())
+  notes      String         @default("")
+  status     WaitlistStatus @default(WAITING)
+  createdAt  DateTime       @default(now())
   seatedAt   DateTime?
 
   // میزی که این مشتری روی آن نشانده شده (فقط بعد از seatFromWaitlist مقداردهی می‌شود).
@@ -993,4 +1018,146 @@ enum WaitlistStatus {
   WAITING
   SEATED
   CANCELLED
+}
+
+// =====================================================================
+// Phase 13: Precise Recipe/BOM (modifiers, yield %, sub-recipes)
+// =====================================================================
+
+// زیرفرمول (Sub-recipe) — یک آماده‌سازیِ میانی و غیرقابل‌فروش (مثلاً یک
+// سس یا خمیر پایه) که خودش از مواد اولیه‌ی خام و/یا زیرفرمول‌های دیگر
+// ساخته می‌شود و می‌تواند به‌عنوان یک «ماده‌ی اولیه» در فرمول چند آیتم منو
+// (یا چند زیرفرمول دیگر) استفاده شود. عمداً یک مدل جدا از MenuItem است،
+// نه یک آیتم منوی «غیرقابل‌فروش»، تا هیچ فرضِ موجودِ کد روی MenuItem
+// (قیمت‌گذاری، نمایش در منو، سفارش‌پذیری) را به‌هم نریزد.
+model SubRecipe {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  // واحدی که خروجیِ این زیرفرمول با آن اندازه‌گیری می‌شود (مثلاً «کیلوگرم»
+  // یا «لیتر») — صرفاً برای نمایش در رابط کاربری؛ محاسبات بر پایه‌ی همان
+  // quantity/yieldPercent هر ردیف مصرف‌کننده انجام می‌شود.
+  unit      String   @default("")
+  notes     String   @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  // ردیف‌های فرمولِ خودِ این زیرفرمول (از چه چیزهایی ساخته می‌شود)
+  items SubRecipeItem[]
+
+  // جاهایی که این زیرفرمول به‌عنوان یک «ماده‌ی اولیه» مصرف می‌شود
+  usedInMenuItemRecipes RecipeItem[]
+  usedInSubRecipes      SubRecipeItem[] @relation("SubRecipeAsIngredient")
+}
+
+// دقیقاً مثل RecipeItem: هر ردیف یا به یک ماده‌ی اولیه‌ی خام
+// (inventoryItemId) یا به یک زیرفرمولِ دیگر (childSubRecipeId) اشاره
+// می‌کند — هرگز هر دو یا هیچ‌کدام (اعمال‌شده در سطح اکشن سرور). جلوگیری
+// از حلقه (زیرفرمولی که مستقیم یا غیرمستقیم به خودش برمی‌گردد) هم در سطح
+// اکشن سرور، با پیمایشِ کامل درخت پیش از ذخیره، انجام می‌شود.
+model SubRecipeItem {
+  id               String  @id @default(uuid())
+  subRecipeId      String
+  inventoryItemId  String?
+  childSubRecipeId String?
+  quantity         Float
+  yieldPercent     Float   @default(100)
+
+  subRecipe      SubRecipe      @relation(fields: [subRecipeId], references: [id], onDelete: Cascade)
+  inventoryItem  InventoryItem? @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  childSubRecipe SubRecipe?     @relation("SubRecipeAsIngredient", fields: [childSubRecipeId], references: [id], onDelete: Restrict)
+
+  @@unique([subRecipeId, inventoryItemId])
+  @@unique([subRecipeId, childSubRecipeId])
+}
+
+// گروهِ مدیفایر/افزودنی (مثلاً «افزودنی‌های پیتزا» یا «سطح تندی») — به یک
+// یا چند آیتم منو، از طریق MenuItemModifierGroup، متصل می‌شود تا در چند
+// آیتم قابل استفاده‌ی مجدد باشد.
+model ModifierGroup {
+  id        String   @id @default(uuid())
+  name      String
+  minSelect Int      @default(0)
+  maxSelect Int      @default(1)
+  createdAt DateTime @default(now())
+
+  modifiers Modifier[]
+  menuItems MenuItemModifierGroup[]
+}
+
+model MenuItemModifierGroup {
+  id              String @id @default(uuid())
+  menuItemId      String
+  modifierGroupId String
+
+  menuItem      MenuItem      @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  modifierGroup ModifierGroup @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
+
+  @@unique([menuItemId, modifierGroupId])
+}
+
+// یک گزینه‌ی مشخص داخل یک گروهِ مدیفایر (مثلاً «پنیر اضافه» یا «بدون سس»).
+// priceDelta به قیمت پایه‌ی آیتم منو اضافه می‌شود (می‌تواند صفر یا منفی
+// هم باشد). اثرِ آن روی موجودی از طریق ModifierRecipeItem تعریف می‌شود.
+model Modifier {
+  id              String   @id @default(uuid())
+  modifierGroupId String
+  name            String
+  priceDelta      Float    @default(0)
+  createdAt       DateTime @default(now())
+
+  modifierGroup  ModifierGroup        @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
+  recipeItems    ModifierRecipeItem[]
+  orderItemLinks OrderItemModifier[]
+}
+
+// اثرِ یک مدیفایر روی مصرف موجودی. quantity می‌تواند مثبت باشد (مدیفایر
+// چیزی اضافه می‌کند، مثل «پنیر اضافه») یا منفی (مدیفایر چیزی را از فرمول
+// پایه کم می‌کند، مثل «بدون سس»). مجموع نهایی هر ماده‌ی اولیه در هر ردیف
+// سفارش، در سطح صفر کلیپ می‌شود — نمی‌توان کمتر از صفر واحد کسر کرد.
+model ModifierRecipeItem {
+  id              String @id @default(uuid())
+  modifierId      String
+  inventoryItemId String
+  quantity        Float
+
+  modifier      Modifier      @relation(fields: [modifierId], references: [id], onDelete: Cascade)
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+
+  @@unique([modifierId, inventoryItemId])
+}
+
+// عکسِ لحظه‌ای مدیفایرهای انتخاب‌شده روی یک ردیفِ سفارشِ واقعی — نام و
+// افزایشِ قیمت همان لحظه ذخیره می‌شوند (دقیقاً مثل الگوی priceAtTime)، تا
+// اگر مدیفایر بعداً ویرایش/حذف شود، تاریخچه‌ی سفارش‌های قبلی دست‌نخورده
+// بماند.
+model OrderItemModifier {
+  id           String  @id @default(uuid())
+  orderItemId  String
+  modifierId   String?
+  modifierName String
+  priceDelta   Float
+
+  orderItem OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  modifier  Modifier? @relation(fields: [modifierId], references: [id], onDelete: SetNull)
+}
+
+// عکسِ لحظه‌ایِ «هر واحد از این ردیفِ سفارش دقیقاً چقدر از این ماده‌ی
+// اولیه مصرف کرد» — بعد از اعمال درصد بازده، بسطِ کاملِ زیرفرمول‌ها و
+// مدیفایرهای انتخابی، در همان لحظه‌ی ثبت سفارش محاسبه و ذخیره می‌شود. هم
+// کسرِ موجودیِ سفارش و هم برگردانِ موجودیِ مرجوعی (refund.ts) از همین
+// عکسِ لحظه‌ای استفاده می‌کنند، نه از فرمولِ زنده‌ی فعلی — تا اگر فرمول یا
+// مدیفایر بین ثبت سفارش و مرجوعی تغییر کند، مرجوعی همچنان دقیقاً همان
+// مقداری را که واقعاً کسر شده بود برمی‌گرداند.
+model OrderItemIngredientUsage {
+  id              String @id @default(uuid())
+  orderItemId     String
+  inventoryItemId String
+  // مقدار مصرفِ این ماده‌ی اولیه به‌ازای «یک واحد» از این ردیفِ سفارش —
+  // کسرِ واقعی از موجودی برابر است با quantityPerUnit × OrderItem.quantity.
+  quantityPerUnit Float
+
+  orderItem     OrderItem     @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+
+  @@unique([orderItemId, inventoryItemId])
 }

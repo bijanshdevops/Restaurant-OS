@@ -430,6 +430,39 @@ Covered end-to-end by `tests/waitlistDeposits.test.ts`.
 
 ---
 
+## Precise Recipe/BOM (Phase 13)
+
+All three sub-features the user asked for shipped together in this phase, all scoped to **`ADMIN`-only** access — the same access model the existing recipe/BOM screen already had (the confirmed choice for this phase, over an alternative that would also have allowed `INVENTORY_MANAGER`).
+
+### Yield % (waste)
+
+Every `RecipeItem` (and every `SubRecipeItem`) gained a `yieldPercent` field, defaulting to `100` for full backward compatibility with every recipe line that existed before this phase. The *effective* quantity deducted from inventory is `quantity / (yieldPercent / 100)` — so a line with `quantity: 2, yieldPercent: 50` deducts `4` units per order, modeling a raw ingredient that is halved by trimming/cooking loss before it reaches the plate.
+
+### Sub-recipes
+
+A new `SubRecipe` model represents an intermediate, non-sellable preparation (a sauce, a base dough, …) built from raw `InventoryItem`s and/or *other* sub-recipes. `RecipeItem` was generalized so each line references **exactly one** of `inventoryItemId` or `subRecipeId` (enforced at the action layer, not just nullable columns) — a menu item's formula can now use a sub-recipe as an "ingredient" the same way it uses a raw item. Sub-recipes nest arbitrarily deep; `src/lib/recipeExpansion.ts` recursively expands a sub-recipe (and its own sub-recipes, and so on) down to raw ingredients, with both a depth cap (12 levels) and full cycle detection (`assertNoSubRecipeCycle`, called before every save) as safety nets against a self-referencing or indirectly-circular formula.
+
+### Modifiers / add-ons
+
+A `ModifierGroup` (e.g. "Pizza extras", "Spice level") holds one or more `Modifier`s and attaches to one or more menu items via `MenuItemModifierGroup`, with a `minSelect`/`maxSelect` range enforced **server-side** at order time — never trusted from the client. Each `Modifier` can carry a `priceDelta` (added to the base menu item price) and any number of `ModifierRecipeItem` effects on inventory, with a **signed** quantity: positive means "consumes more" (e.g. extra cheese), negative means "consumes less than the base formula" (e.g. no sauce). The net effect per ingredient, across the base formula plus every selected modifier, is **clamped at zero** — a modifier can never push a deduction negative (i.e. can never *add* stock back).
+
+### The ingredient-usage snapshot (and a pre-existing bug it fixes)
+
+The single most important design decision in this phase: a new `OrderItemIngredientUsage` table snapshots **exactly how much of each raw ingredient a given order line consumed**, computed once — via the same `computeIngredientUsagePerUnit()` that order creation itself uses — at the moment the order (or online order) is created, never recomputed later. `OrderItemModifier` does the same for the selected modifiers' name and price (mirroring the existing `priceAtTime` pattern).
+
+This closes a latent correctness gap in the refund flow that predates this phase: `createRefund` (`refund.ts`) used to restock inventory by **re-walking the menu item's current `recipeItems`** at refund time. If a recipe (or, from this phase on, a sub-recipe's contents, a yield %, or a modifier) was edited between the order and the refund, the refund would restock the *new* formula's quantities — silently wrong for every order placed under the old formula. `refund.ts` now reads the `OrderItemIngredientUsage` rows captured at order time instead, so a refund always restocks precisely what was actually deducted, regardless of any later formula edits. `tests/preciseRecipe.test.ts` has a dedicated test that changes a recipe's quantity by 5x between order and refund and asserts the refund still restocks the original amount.
+
+### Known scope decisions (disclosed)
+
+- **ADMIN-only**, matching the existing recipe screen — not opened up to `INVENTORY_MANAGER`.
+- **Cost analysis** (`getMenuCostAnalysis`, `getMenuItemRecipe`) now walks the full expansion (yield % + nested sub-recipes) via the same shared library, but **deliberately excludes modifier effects** — a modifier is an order-time customer choice, not part of the item's own fixed formula, so it doesn't belong in the item's baseline cost/margin figures.
+- **Online orders** (`createOnlineOrder`) snapshot usage/modifiers at order-creation time, same as POS orders — inventory is still only actually decremented later, at payment confirmation (`finalizeOnlineOrderAfterPayment`), exactly as before this phase; only the *source* of the deduction numbers changed (snapshot instead of live recipe).
+- **A reliability fix alongside the feature work**: every recipe-expansion/cycle-check query is now threaded through the caller's own `$transaction` client when called from inside one (`order.ts`, `subRecipe.ts`), instead of the global `prisma` client. Mixing the two inside an interactive transaction can intermittently starve the connection pool (the transaction holds one connection while waiting on a query that needs a second one) — this was caught by intermittent CI-local test failures during this phase's own development and fixed before shipping.
+
+Covered end-to-end by `tests/preciseRecipe.test.ts` (access control, yield %, sub-recipe expansion and cost roll-up, cycle detection, modifier price/inventory effects including zero-clamping, min/maxSelect validation, and the snapshot-vs-live-formula refund test described above).
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, review process, and branching model.

@@ -8,30 +8,54 @@ import { requireCustomer } from '@/lib/customerAuth';
 import { awardLoyaltyForOrder, pointsForAmount } from '@/lib/loyalty';
 import { getDefaultBranchId } from './branch';
 import { SYSTEM_CATEGORY_IDS } from '@/lib/accountingCategories';
+import { computeIngredientUsagePerUnit } from '@/lib/recipeExpansion';
 
 interface CartItem {
   menuItemId: string;
   quantity: number;
+  /** فاز ۱۳: شناسه‌ی مدیفایرها/افزودنی‌های انتخاب‌شده برای این ردیفِ سبد (اختیاری). */
+  modifierIds?: string[];
+}
+
+interface ResolvedCartLine {
+  cartItem: CartItem;
+  menuItem: { id: string; title: string; price: number; isAvailable: boolean };
+  /** قیمتِ واحد نهایی = قیمتِ پایه‌ی آیتم منو + مجموعِ priceDelta مدیفایرهای انتخابی. */
+  unitPrice: number;
+  selectedModifiers: { id: string; name: string; priceDelta: number }[];
 }
 
 /**
  * Re-fetches the real, current price for every cart item from the database
  * and validates availability/quantity. The client only ever sends a
- * menuItemId + quantity — price and total are NEVER trusted from the
- * browser, since a tampered request could otherwise place an order at any
- * price it likes. Shared by both the POS flow (createOrder) and the
- * customer-facing online ordering flow (createOnlineOrder).
+ * menuItemId + quantity (+ optionally modifierIds) — price and total are
+ * NEVER trusted from the browser, since a tampered request could otherwise
+ * place an order at any price it likes. Shared by both the POS flow
+ * (createOrder) and the customer-facing online ordering flow
+ * (createOnlineOrder).
+ *
+ * فاز ۱۳: علاوه بر قیمتِ پایه، مدیفایرهای انتخابیِ هر ردیف هم سمت سرور
+ * دوباره اعتبارسنجی و قیمت‌گذاری می‌شوند — شناسه‌ی مدیفایر باید واقعاً به
+ * یکی از گروه‌های متصل به همان آیتم منو تعلق داشته باشد، و تعدادِ
+ * انتخاب‌شده در هر گروه باید در بازه‌ی minSelect..maxSelect همان گروه
+ * باشد. priceDelta هر مدیفایر همیشه از دیتابیس خوانده می‌شود، هرگز از
+ * کلاینت.
  */
 async function verifyCartItems(
   tx: Prisma.TransactionClient,
   cartItems: CartItem[]
-) {
+): Promise<{ resolvedLines: ResolvedCartLine[]; subtotal: number }> {
   const menuItemIds = [...new Set(cartItems.map((c) => c.menuItemId))];
   const menuItems = await tx.menuItem.findMany({
     where: { id: { in: menuItemIds } },
-    include: { recipeItems: true },
+    include: {
+      modifierGroupLinks: { include: { modifierGroup: { include: { modifiers: true } } } },
+    },
   });
   const menuItemMap = new Map(menuItems.map((m) => [m.id, m]));
+
+  const resolvedLines: ResolvedCartLine[] = [];
+  let subtotal = 0;
 
   for (const cartItem of cartItems) {
     const menuItem = menuItemMap.get(cartItem.menuItemId);
@@ -44,14 +68,125 @@ async function verifyCartItems(
     if (!Number.isFinite(cartItem.quantity) || cartItem.quantity <= 0) {
       throw new Error('تعداد نامعتبر در سفارش');
     }
+
+    const requestedModifierIds = [...new Set(cartItem.modifierIds || [])];
+    const modifierById = new Map<
+      string,
+      { id: string; name: string; priceDelta: number; groupId: string }
+    >();
+    for (const link of menuItem.modifierGroupLinks) {
+      for (const mod of link.modifierGroup.modifiers) {
+        modifierById.set(mod.id, {
+          id: mod.id,
+          name: mod.name,
+          priceDelta: mod.priceDelta,
+          groupId: link.modifierGroupId,
+        });
+      }
+    }
+
+    const selectedModifiers: { id: string; name: string; priceDelta: number }[] = [];
+    const countByGroup = new Map<string, number>();
+    for (const modId of requestedModifierIds) {
+      const mod = modifierById.get(modId);
+      if (!mod) {
+        throw new Error(`افزودنیِ انتخاب‌شده برای «${menuItem.title}» معتبر نیست`);
+      }
+      selectedModifiers.push({ id: mod.id, name: mod.name, priceDelta: mod.priceDelta });
+      countByGroup.set(mod.groupId, (countByGroup.get(mod.groupId) || 0) + 1);
+    }
+
+    for (const link of menuItem.modifierGroupLinks) {
+      const count = countByGroup.get(link.modifierGroupId) || 0;
+      if (count < link.modifierGroup.minSelect) {
+        throw new Error(`انتخابِ گروهِ «${link.modifierGroup.name}» برای «${menuItem.title}» الزامی است`);
+      }
+      if (count > link.modifierGroup.maxSelect) {
+        throw new Error(`تعدادِ انتخاب‌شده در گروهِ «${link.modifierGroup.name}» بیش از حدِ مجاز است`);
+      }
+    }
+
+    const unitPrice = menuItem.price + selectedModifiers.reduce((s, m) => s + m.priceDelta, 0);
+    subtotal += unitPrice * cartItem.quantity;
+
+    resolvedLines.push({ cartItem, menuItem, unitPrice, selectedModifiers });
   }
 
-  const subtotal = cartItems.reduce((sum, c) => {
-    const menuItem = menuItemMap.get(c.menuItemId)!;
-    return sum + menuItem.price * c.quantity;
-  }, 0);
+  return { resolvedLines, subtotal };
+}
 
-  return { menuItemMap, subtotal };
+/**
+ * برای هر ردیفِ سبدِ حل‌شده (resolvedLines): یک OrderItem می‌سازد، مدیفایرهای
+ * انتخابی را به‌صورتِ عکسِ لحظه‌ای (OrderItemModifier — نام و priceDelta
+ * همان لحظه) ذخیره می‌کند، و مصرفِ موادِ اولیه‌ی همان ردیف را یک‌بار برای
+ * همیشه محاسبه و در OrderItemIngredientUsage ذخیره می‌کند (فاز ۱۳).
+ *
+ * این عکسِ لحظه‌ای دقیقاً همان چیزی است که بعداً هم برای کسرِ واقعیِ
+ * موجودی (چه بلافاصله در createOrder، چه بعد از تأیید پرداخت در
+ * finalizeOnlineOrderAfterPayment) و هم برای برگردانِ درستِ موجودی در
+ * مرجوعی (refund.ts) استفاده می‌شود — نه فرمولِ زنده‌ی فعلی — تا تغییرِ
+ * بعدیِ فرمول/مدیفایر هرگز روی سفارش‌های قبلاً ثبت‌شده اثر نگذارد.
+ *
+ * خروجی: نگاشتِ «مجموعِ مقدارِ مصرفِ هر ماده‌ی اولیه در کلِ این سفارش» —
+ * صرفاً محاسبه‌شده، هنوز به هیچ BranchInventoryStock اعمال نشده؛ تصمیمِ
+ * «کدام شعبه» و «چه زمانی اعمال شود» با فراخواننده است.
+ */
+async function createOrderItemsWithSnapshots(
+  tx: Prisma.TransactionClient,
+  orderId: string,
+  resolvedLines: ResolvedCartLine[]
+): Promise<Map<string, number>> {
+  const totalStockDeductions = new Map<string, number>();
+
+  for (const line of resolvedLines) {
+    const orderItem = await tx.orderItem.create({
+      data: {
+        orderId,
+        menuItemId: line.menuItem.id,
+        quantity: line.cartItem.quantity,
+        priceAtTime: line.unitPrice,
+      },
+    });
+
+    if (line.selectedModifiers.length > 0) {
+      await tx.orderItemModifier.createMany({
+        data: line.selectedModifiers.map((m) => ({
+          orderItemId: orderItem.id,
+          modifierId: m.id,
+          modifierName: m.name,
+          priceDelta: m.priceDelta,
+        })),
+      });
+    }
+
+    // db=tx: این کوئری‌ها باید داخلِ همین تراکنش اجرا شوند، نه با کلاینتِ
+    // سراسریِ prisma — وگرنه در بارِ هم‌زمان می‌توانند با خودِ تراکنش سرِ
+    // گرفتنِ اتصال از connection pool رقابت کنند (نک. توضیحِ recipeExpansion.ts).
+    const usagePerUnit = await computeIngredientUsagePerUnit(
+      line.menuItem.id,
+      line.selectedModifiers.map((m) => m.id),
+      tx
+    );
+
+    if (usagePerUnit.size > 0) {
+      await tx.orderItemIngredientUsage.createMany({
+        data: [...usagePerUnit.entries()].map(([inventoryItemId, quantityPerUnit]) => ({
+          orderItemId: orderItem.id,
+          inventoryItemId,
+          quantityPerUnit,
+        })),
+      });
+    }
+
+    for (const [inventoryItemId, qtyPerUnit] of usagePerUnit) {
+      totalStockDeductions.set(
+        inventoryItemId,
+        (totalStockDeductions.get(inventoryItemId) || 0) + qtyPerUnit * line.cartItem.quantity
+      );
+    }
+  }
+
+  return totalStockDeductions;
 }
 
 export async function createOrder(cartItems: CartItem[], customerId?: string, branchId?: string) {
@@ -70,10 +205,10 @@ export async function createOrder(cartItems: CartItem[], customerId?: string, br
 
     // We use a Prisma transaction to ensure the order and its items are created atomically
     const newOrder = await prisma.$transaction(async (tx) => {
-      // 1. Re-fetch the real, current price (and recipe/ingredients) for every item
-      // from the database — see verifyCartItems for why this can't be trusted
-      // from the client.
-      const { menuItemMap, subtotal } = await verifyCartItems(tx, cartItems);
+      // 1. Re-fetch the real, current price (and validate/price modifiers) for
+      // every item from the database — see verifyCartItems for why this can't
+      // be trusted from the client.
+      const { resolvedLines, subtotal } = await verifyCartItems(tx, cartItems);
 
       // Apply tax and packaging cost from the restaurant's own settings — read
       // from the database here, never from the client, so a tampered request
@@ -109,29 +244,13 @@ export async function createOrder(cartItems: CartItem[], customerId?: string, br
         },
       });
 
-      // 3. Create the associated order items, using the server-verified price
-      await tx.orderItem.createMany({
-        data: cartItems.map((item) => ({
-          orderId: order.id,
-          menuItemId: item.menuItemId,
-          quantity: item.quantity,
-          priceAtTime: menuItemMap.get(item.menuItemId)!.price,
-        })),
-      });
+      // 3. Create the associated order items (with the server-verified price
+      // and selected modifiers), and snapshot each one's ingredient usage
+      // (فاز ۱۳ — نک. createOrderItemsWithSnapshots).
+      const stockDeductions = await createOrderItemsWithSnapshots(tx, order.id, resolvedLines);
 
-      // 4. Deduct ingredient stock according to each item's recipe (BOM) —
-      // from THIS order's own branch's BranchInventoryStock.
-      const stockDeductions = new Map<string, number>();
-      for (const cartItem of cartItems) {
-        const menuItem = menuItemMap.get(cartItem.menuItemId)!;
-        for (const recipeLine of menuItem.recipeItems) {
-          const amount = recipeLine.quantity * cartItem.quantity;
-          stockDeductions.set(
-            recipeLine.inventoryItemId,
-            (stockDeductions.get(recipeLine.inventoryItemId) || 0) + amount
-          );
-        }
-      }
+      // 4. Deduct ingredient stock according to each item's snapshotted usage
+      // — from THIS order's own branch's BranchInventoryStock.
       for (const [inventoryItemId, amount] of stockDeductions) {
         await tx.branchInventoryStock.update({
           where: {
@@ -263,7 +382,7 @@ export async function createOnlineOrder(
     const orderNumber = `ORD-${randomBytes(2).toString('hex').toUpperCase()}`;
 
     const result = await prisma.$transaction(async (tx) => {
-      const { menuItemMap, subtotal } = await verifyCartItems(tx, cartItems);
+      const { resolvedLines, subtotal } = await verifyCartItems(tx, cartItems);
 
       const [settings, customer] = await Promise.all([
         tx.restaurantSettings.findUnique({ where: { id: 'default' } }),
@@ -301,14 +420,10 @@ export async function createOnlineOrder(
         },
       });
 
-      await tx.orderItem.createMany({
-        data: cartItems.map((item) => ({
-          orderId: order.id,
-          menuItemId: item.menuItemId,
-          quantity: item.quantity,
-          priceAtTime: menuItemMap.get(item.menuItemId)!.price,
-        })),
-      });
+      // مصرفِ موادِ اولیه (فاز ۱۳) همین‌جا، در لحظه‌ی ثبتِ سفارش، محاسبه و
+      // به‌صورتِ عکسِ لحظه‌ای ذخیره می‌شود — کسرِ واقعیِ موجودی اما تا زمانِ
+      // تأییدِ پرداخت به تعویق می‌افتد (نک. finalizeOnlineOrderAfterPayment).
+      await createOrderItemsWithSnapshots(tx, order.id, resolvedLines);
 
       const payment = await tx.payment.create({
         data: {
@@ -374,7 +489,7 @@ export async function finalizeOnlineOrderAfterPayment(orderId: string) {
   return prisma.$transaction(async (tx) => {
     const order = await tx.order.findUnique({
       where: { id: orderId },
-      include: { items: { include: { menuItem: { include: { recipeItems: true } } } } },
+      include: { items: { include: { ingredientUsages: true } } },
     });
     if (!order) throw new Error('سفارش یافت نشد');
 
@@ -383,15 +498,16 @@ export async function finalizeOnlineOrderAfterPayment(orderId: string) {
       return order;
     }
 
-    // 1. Deduct ingredient stock according to each item's recipe (BOM) —
-    // from the default branch's stock (see function docstring).
+    // 1. Deduct ingredient stock according to each item's SNAPSHOTTED usage
+    // (OrderItemIngredientUsage — محاسبه‌شده در لحظه‌ی createOnlineOrder، نه
+    // فرمولِ زنده‌ی فعلی؛ فاز ۱۳) — از موجودیِ شعبه‌ی پیش‌فرض (نک. docstring).
     const stockDeductions = new Map<string, number>();
     for (const item of order.items) {
-      for (const recipeLine of item.menuItem.recipeItems) {
-        const amount = recipeLine.quantity * item.quantity;
+      for (const usage of item.ingredientUsages) {
+        const amount = usage.quantityPerUnit * item.quantity;
         stockDeductions.set(
-          recipeLine.inventoryItemId,
-          (stockDeductions.get(recipeLine.inventoryItemId) || 0) + amount
+          usage.inventoryItemId,
+          (stockDeductions.get(usage.inventoryItemId) || 0) + amount
         );
       }
     }

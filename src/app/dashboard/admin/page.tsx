@@ -7,6 +7,14 @@ import { getUsers, createUser, deleteUser } from '@/app/actions/user';
 import { getBranches } from '@/app/actions/branch';
 import { getPrinters, createPrinter, updatePrinter, deletePrinter } from '@/app/actions/printer';
 import { getMenuCostAnalysis, getMenuItemRecipe, saveMenuItemRecipe, updateInventoryItemCost } from '@/app/actions/costing';
+import { getSubRecipes, getSubRecipeDetail, saveSubRecipe, deleteSubRecipe } from '@/app/actions/subRecipe';
+import {
+  getModifierGroups,
+  saveModifierGroup,
+  deleteModifierGroup,
+  getMenuItemModifierGroups,
+  setMenuItemModifierGroups,
+} from '@/app/actions/modifiers';
 import { getSettings, updateSettings } from '@/app/actions/settings';
 import { Role, PrinterType, PrinterConnectionType } from '@prisma/client';
 
@@ -77,12 +85,59 @@ interface BulkRow {
 }
 
 interface RecipeLine {
+  /** دقیقاً یکی از inventoryItemId/subRecipeId باید پر باشد (فاز ۱۳). */
   inventoryItemId: string;
+  subRecipeId: string;
   quantity: number;
+  /** درصد بازده/عکسِ ضایعات — پیش‌فرض ۱۰۰ یعنی بدون ضایعات (فاز ۱۳). */
+  yieldPercent: number;
+}
+
+interface SubRecipeOption {
+  id: string;
+  name: string;
+  unit: string;
+  costPerUnit: number;
+}
+
+interface SubRecipeListRow {
+  id: string;
+  name: string;
+  unit: string;
+  notes: string;
+  _count: { items: number };
+}
+
+interface SubRecipeLine {
+  inventoryItemId: string;
+  childSubRecipeId: string;
+  quantity: number;
+  yieldPercent: number;
+}
+
+interface ModifierRow {
+  id?: string;
+  name: string;
+  priceDelta: number;
+  recipeLines: { inventoryItemId: string; quantity: number }[];
+}
+
+interface ModifierGroupRow {
+  id: string;
+  name: string;
+  minSelect: number;
+  maxSelect: number;
+  modifiers: {
+    id: string;
+    name: string;
+    priceDelta: number;
+    recipeItems: { inventoryItemId: string; quantity: number; inventoryItem: { name: string; unit: string } }[];
+  }[];
+  _count: { menuItems: number };
 }
 
 export default function AdminPage() {
-  const [activeTab, setActiveTab] = useState<'menu' | 'settings' | 'users' | 'printers' | 'costing'>('menu');
+  const [activeTab, setActiveTab] = useState<'menu' | 'settings' | 'users' | 'printers' | 'costing' | 'subrecipes' | 'modifiers'>('menu');
   
   // --- Menu Management State ---
   const [items, setItems] = useState<MenuItem[]>([]);
@@ -136,6 +191,39 @@ export default function AdminPage() {
   const [recipeLines, setRecipeLines] = useState<RecipeLine[]>([]);
   const [isSavingRecipe, setIsSavingRecipe] = useState(false);
   const [isLoadingRecipe, setIsLoadingRecipe] = useState(false);
+  // فاز ۱۳: فهرست زیرفرمول‌های قابل‌انتخاب (به‌عنوان ماده‌ی اولیه) + گروه‌های
+  // مدیفایرِ اختصاص‌داده‌شده به همین آیتم منو — هر دو داخل همان مودالِ فرمول.
+  const [recipeSubRecipeOptions, setRecipeSubRecipeOptions] = useState<SubRecipeOption[]>([]);
+  const [recipeAllModifierGroups, setRecipeAllModifierGroups] = useState<ModifierGroupRow[]>([]);
+  const [recipeSelectedModifierGroupIds, setRecipeSelectedModifierGroupIds] = useState<string[]>([]);
+  const [isSavingRecipeModifierGroups, setIsSavingRecipeModifierGroups] = useState(false);
+
+  // --- Sub-Recipes (فاز ۱۳) State ---
+  const [subRecipeList, setSubRecipeList] = useState<SubRecipeListRow[]>([]);
+  const [isLoadingSubRecipes, setIsLoadingSubRecipes] = useState(false);
+  const [isSubRecipeModalOpen, setIsSubRecipeModalOpen] = useState(false);
+  const [editingSubRecipeId, setEditingSubRecipeId] = useState<string | null>(null);
+  const [subRecipeName, setSubRecipeName] = useState('');
+  const [subRecipeUnit, setSubRecipeUnit] = useState('');
+  const [subRecipeNotes, setSubRecipeNotes] = useState('');
+  const [subRecipeLines, setSubRecipeLines] = useState<SubRecipeLine[]>([]);
+  const [subRecipeInventoryOptions, setSubRecipeInventoryOptions] = useState<InventoryItemOption[]>([]);
+  const [subRecipeOtherOptions, setSubRecipeOtherOptions] = useState<{ id: string; name: string }[]>([]);
+  const [isLoadingSubRecipeDetail, setIsLoadingSubRecipeDetail] = useState(false);
+  const [isSavingSubRecipe, setIsSavingSubRecipe] = useState(false);
+  const [subRecipeError, setSubRecipeError] = useState('');
+
+  // --- Modifier Groups (فاز ۱۳) State ---
+  const [modifierGroups, setModifierGroups] = useState<ModifierGroupRow[]>([]);
+  const [isLoadingModifierGroups, setIsLoadingModifierGroups] = useState(false);
+  const [isModifierGroupModalOpen, setIsModifierGroupModalOpen] = useState(false);
+  const [editingModifierGroupId, setEditingModifierGroupId] = useState<string | null>(null);
+  const [modifierGroupName, setModifierGroupName] = useState('');
+  const [modifierGroupMinSelect, setModifierGroupMinSelect] = useState(0);
+  const [modifierGroupMaxSelect, setModifierGroupMaxSelect] = useState(1);
+  const [modifierGroupModifiers, setModifierGroupModifiers] = useState<ModifierRow[]>([]);
+  const [isSavingModifierGroup, setIsSavingModifierGroup] = useState(false);
+  const [modifierGroupError, setModifierGroupError] = useState('');
 
   // --- Bulk Import State ---
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
@@ -235,6 +323,18 @@ export default function AdminPage() {
       fetchCostAnalysis();
     }
   }, [activeTab, fetchCostAnalysis, costAnalysis.length]);
+
+  useEffect(() => {
+    if (activeTab === 'subrecipes' && subRecipeList.length === 0) {
+      fetchSubRecipes();
+    }
+  }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (activeTab === 'modifiers' && modifierGroups.length === 0) {
+      fetchModifierGroups();
+    }
+  }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- Formatters ---
   const toPersianDigits = (num: number | string) => {
@@ -565,15 +665,28 @@ export default function AdminPage() {
     setRecipeMenuItem(item);
     setIsRecipeModalOpen(true);
     setIsLoadingRecipe(true);
-    const res = await getMenuItemRecipe(item.id);
+    const [res, modifierGroupsRes, assignedRes] = await Promise.all([
+      getMenuItemRecipe(item.id),
+      getModifierGroups(),
+      getMenuItemModifierGroups(item.id),
+    ]);
     if (res.success) {
       setRecipeInventoryItems((res.inventoryItems || []) as InventoryItemOption[]);
+      setRecipeSubRecipeOptions((res.subRecipes || []) as SubRecipeOption[]);
       setRecipeLines(
         (res.recipeItems || []).map((ri: any) => ({
-          inventoryItemId: ri.inventoryItemId,
+          inventoryItemId: ri.inventoryItemId || '',
+          subRecipeId: ri.subRecipeId || '',
           quantity: ri.quantity,
+          yieldPercent: ri.yieldPercent ?? 100,
         }))
       );
+    }
+    if (modifierGroupsRes.success) {
+      setRecipeAllModifierGroups((modifierGroupsRes.groups || []) as ModifierGroupRow[]);
+    }
+    if (assignedRes.success) {
+      setRecipeSelectedModifierGroupIds(assignedRes.modifierGroupIds || []);
     }
     setIsLoadingRecipe(false);
   };
@@ -582,18 +695,33 @@ export default function AdminPage() {
     setIsRecipeModalOpen(false);
     setRecipeMenuItem(null);
     setRecipeLines([]);
+    setRecipeSubRecipeOptions([]);
+    setRecipeAllModifierGroups([]);
+    setRecipeSelectedModifierGroupIds([]);
   };
 
   const addRecipeLine = () => {
-    setRecipeLines([...recipeLines, { inventoryItemId: '', quantity: 0 }]);
+    setRecipeLines([...recipeLines, { inventoryItemId: '', subRecipeId: '', quantity: 0, yieldPercent: 100 }]);
   };
 
   const removeRecipeLine = (index: number) => {
     setRecipeLines(recipeLines.filter((_, i) => i !== index));
   };
 
-  const updateRecipeLine = (index: number, field: 'inventoryItemId' | 'quantity', value: string | number) => {
-    setRecipeLines(recipeLines.map((line, i) => i === index ? { ...line, [field]: value } as RecipeLine : line));
+  const updateRecipeLine = (
+    index: number,
+    field: 'inventoryItemId' | 'subRecipeId' | 'quantity' | 'yieldPercent',
+    value: string | number
+  ) => {
+    setRecipeLines(recipeLines.map((line, i) => {
+      if (i !== index) return line;
+      const updated = { ...line, [field]: value } as RecipeLine;
+      // انتخابِ یکی از «ماده‌ی اولیه» یا «زیرفرمول» باید دیگری را خالی کند —
+      // هر ردیف دقیقاً یکی از این دو را دارد (فاز ۱۳).
+      if (field === 'inventoryItemId' && value) updated.subRecipeId = '';
+      if (field === 'subRecipeId' && value) updated.inventoryItemId = '';
+      return updated;
+    }));
   };
 
   const updateIngredientCostLocal = async (inventoryItemId: string, cost: number) => {
@@ -603,21 +731,266 @@ export default function AdminPage() {
 
   const computeRecipeCost = () => {
     return recipeLines.reduce((sum, line) => {
+      const yieldFactor = (line.yieldPercent || 100) / 100;
+      if (line.subRecipeId) {
+        const sub = recipeSubRecipeOptions.find(s => s.id === line.subRecipeId);
+        return sum + (sub ? (sub.costPerUnit * line.quantity) / yieldFactor : 0);
+      }
       const inv = recipeInventoryItems.find(i => i.id === line.inventoryItemId);
-      return sum + (inv ? inv.costPerUnit * line.quantity : 0);
+      return sum + (inv ? (inv.costPerUnit * line.quantity) / yieldFactor : 0);
     }, 0);
   };
 
   const handleSaveRecipe = async () => {
     if (!recipeMenuItem) return;
     setIsSavingRecipe(true);
-    const res = await saveMenuItemRecipe(recipeMenuItem.id, recipeLines);
+    const res = await saveMenuItemRecipe(
+      recipeMenuItem.id,
+      recipeLines.map(l => ({
+        inventoryItemId: l.inventoryItemId || undefined,
+        subRecipeId: l.subRecipeId || undefined,
+        quantity: l.quantity,
+        yieldPercent: l.yieldPercent || 100,
+      }))
+    );
     setIsSavingRecipe(false);
     if (res.success) {
       closeRecipeModal();
       fetchCostAnalysis();
     } else {
       alert(res.error || 'خطا در ذخیره فرمول غذا');
+    }
+  };
+
+  const handleToggleRecipeModifierGroup = (groupId: string) => {
+    setRecipeSelectedModifierGroupIds(prev =>
+      prev.includes(groupId) ? prev.filter(id => id !== groupId) : [...prev, groupId]
+    );
+  };
+
+  const handleSaveRecipeModifierGroups = async () => {
+    if (!recipeMenuItem) return;
+    setIsSavingRecipeModifierGroups(true);
+    const res = await setMenuItemModifierGroups(recipeMenuItem.id, recipeSelectedModifierGroupIds);
+    setIsSavingRecipeModifierGroups(false);
+    if (!res.success) {
+      alert(res.error || 'خطا در ذخیره‌ی گروه‌های مدیفایر این آیتم');
+    }
+  };
+
+  // --- Sub-Recipes (فاز ۱۳) Handlers ---
+  const fetchSubRecipes = async () => {
+    setIsLoadingSubRecipes(true);
+    const res = await getSubRecipes();
+    if (res.success) setSubRecipeList((res.subRecipes || []) as SubRecipeListRow[]);
+    setIsLoadingSubRecipes(false);
+  };
+
+  const openNewSubRecipeModal = () => {
+    setEditingSubRecipeId(null);
+    setSubRecipeName('');
+    setSubRecipeUnit('');
+    setSubRecipeNotes('');
+    setSubRecipeLines([]);
+    setSubRecipeInventoryOptions([]);
+    setSubRecipeOtherOptions([]);
+    setSubRecipeError('');
+    setIsSubRecipeModalOpen(true);
+  };
+
+  const openEditSubRecipeModal = async (subRecipeId: string) => {
+    setEditingSubRecipeId(subRecipeId);
+    setSubRecipeError('');
+    setIsSubRecipeModalOpen(true);
+    setIsLoadingSubRecipeDetail(true);
+    const res = await getSubRecipeDetail(subRecipeId);
+    if (res.success) {
+      const sr: any = res.subRecipe;
+      setSubRecipeName(sr.name);
+      setSubRecipeUnit(sr.unit || '');
+      setSubRecipeNotes(sr.notes || '');
+      setSubRecipeLines(
+        (res.items || []).map((it: any) => ({
+          inventoryItemId: it.inventoryItemId || '',
+          childSubRecipeId: it.childSubRecipeId || '',
+          quantity: it.quantity,
+          yieldPercent: it.yieldPercent ?? 100,
+        }))
+      );
+      setSubRecipeInventoryOptions((res.inventoryItems || []).map((i: any) => ({ id: i.id, name: i.name, unit: i.unit, costPerUnit: 0 })));
+      setSubRecipeOtherOptions((res.otherSubRecipes || []).map((s: any) => ({ id: s.id, name: s.name })));
+    } else {
+      setSubRecipeError(res.error || 'خطا در دریافت جزئیات زیرفرمول');
+    }
+    setIsLoadingSubRecipeDetail(false);
+  };
+
+  const closeSubRecipeModal = () => {
+    setIsSubRecipeModalOpen(false);
+    setEditingSubRecipeId(null);
+  };
+
+  const addSubRecipeLine = () => {
+    setSubRecipeLines([...subRecipeLines, { inventoryItemId: '', childSubRecipeId: '', quantity: 0, yieldPercent: 100 }]);
+  };
+
+  const removeSubRecipeLine = (index: number) => {
+    setSubRecipeLines(subRecipeLines.filter((_, i) => i !== index));
+  };
+
+  const updateSubRecipeLine = (
+    index: number,
+    field: 'inventoryItemId' | 'childSubRecipeId' | 'quantity' | 'yieldPercent',
+    value: string | number
+  ) => {
+    setSubRecipeLines(subRecipeLines.map((line, i) => {
+      if (i !== index) return line;
+      const updated = { ...line, [field]: value } as SubRecipeLine;
+      if (field === 'inventoryItemId' && value) updated.childSubRecipeId = '';
+      if (field === 'childSubRecipeId' && value) updated.inventoryItemId = '';
+      return updated;
+    }));
+  };
+
+  const handleSaveSubRecipe = async () => {
+    setIsSavingSubRecipe(true);
+    setSubRecipeError('');
+    const res = await saveSubRecipe(
+      editingSubRecipeId,
+      subRecipeName,
+      subRecipeUnit,
+      subRecipeNotes,
+      subRecipeLines.map(l => ({
+        inventoryItemId: l.inventoryItemId || undefined,
+        childSubRecipeId: l.childSubRecipeId || undefined,
+        quantity: l.quantity,
+        yieldPercent: l.yieldPercent || 100,
+      }))
+    );
+    setIsSavingSubRecipe(false);
+    if (res.success) {
+      closeSubRecipeModal();
+      fetchSubRecipes();
+    } else {
+      setSubRecipeError(res.error || 'خطا در ذخیره‌ی زیرفرمول');
+    }
+  };
+
+  const handleDeleteSubRecipe = async (subRecipeId: string) => {
+    if (!confirm('آیا از حذف این زیرفرمول مطمئن هستید؟')) return;
+    const res = await deleteSubRecipe(subRecipeId);
+    if (res.success) {
+      fetchSubRecipes();
+    } else {
+      alert(res.error || 'خطا در حذف زیرفرمول');
+    }
+  };
+
+  // --- Modifier Groups (فاز ۱۳) Handlers ---
+  const fetchModifierGroups = async () => {
+    setIsLoadingModifierGroups(true);
+    const res = await getModifierGroups();
+    if (res.success) setModifierGroups((res.groups || []) as ModifierGroupRow[]);
+    setIsLoadingModifierGroups(false);
+  };
+
+  const openNewModifierGroupModal = () => {
+    setEditingModifierGroupId(null);
+    setModifierGroupName('');
+    setModifierGroupMinSelect(0);
+    setModifierGroupMaxSelect(1);
+    setModifierGroupModifiers([]);
+    setModifierGroupError('');
+    setIsModifierGroupModalOpen(true);
+  };
+
+  const openEditModifierGroupModal = (group: ModifierGroupRow) => {
+    setEditingModifierGroupId(group.id);
+    setModifierGroupName(group.name);
+    setModifierGroupMinSelect(group.minSelect);
+    setModifierGroupMaxSelect(group.maxSelect);
+    setModifierGroupModifiers(
+      group.modifiers.map(m => ({
+        id: m.id,
+        name: m.name,
+        priceDelta: m.priceDelta,
+        recipeLines: m.recipeItems.map(ri => ({ inventoryItemId: ri.inventoryItemId, quantity: ri.quantity })),
+      }))
+    );
+    setModifierGroupError('');
+    setIsModifierGroupModalOpen(true);
+  };
+
+  const closeModifierGroupModal = () => {
+    setIsModifierGroupModalOpen(false);
+    setEditingModifierGroupId(null);
+  };
+
+  const addModifierRow = () => {
+    setModifierGroupModifiers([...modifierGroupModifiers, { name: '', priceDelta: 0, recipeLines: [] }]);
+  };
+
+  const removeModifierRow = (index: number) => {
+    setModifierGroupModifiers(modifierGroupModifiers.filter((_, i) => i !== index));
+  };
+
+  const updateModifierRow = (index: number, field: 'name' | 'priceDelta', value: string | number) => {
+    setModifierGroupModifiers(modifierGroupModifiers.map((m, i) => i === index ? { ...m, [field]: value } : m));
+  };
+
+  const addModifierRecipeLine = (modifierIndex: number) => {
+    setModifierGroupModifiers(modifierGroupModifiers.map((m, i) =>
+      i === modifierIndex ? { ...m, recipeLines: [...m.recipeLines, { inventoryItemId: '', quantity: 0 }] } : m
+    ));
+  };
+
+  const removeModifierRecipeLine = (modifierIndex: number, lineIndex: number) => {
+    setModifierGroupModifiers(modifierGroupModifiers.map((m, i) =>
+      i === modifierIndex ? { ...m, recipeLines: m.recipeLines.filter((_, li) => li !== lineIndex) } : m
+    ));
+  };
+
+  const updateModifierRecipeLine = (
+    modifierIndex: number,
+    lineIndex: number,
+    field: 'inventoryItemId' | 'quantity',
+    value: string | number
+  ) => {
+    setModifierGroupModifiers(modifierGroupModifiers.map((m, i) => {
+      if (i !== modifierIndex) return m;
+      return {
+        ...m,
+        recipeLines: m.recipeLines.map((l, li) => li === lineIndex ? { ...l, [field]: value } : l),
+      };
+    }));
+  };
+
+  const handleSaveModifierGroup = async () => {
+    setIsSavingModifierGroup(true);
+    setModifierGroupError('');
+    const res = await saveModifierGroup(
+      editingModifierGroupId,
+      modifierGroupName,
+      modifierGroupMinSelect,
+      modifierGroupMaxSelect,
+      modifierGroupModifiers
+    );
+    setIsSavingModifierGroup(false);
+    if (res.success) {
+      closeModifierGroupModal();
+      fetchModifierGroups();
+    } else {
+      setModifierGroupError(res.error || 'خطا در ذخیره‌ی گروه مدیفایر');
+    }
+  };
+
+  const handleDeleteModifierGroup = async (groupId: string) => {
+    if (!confirm('آیا از حذف این گروه مدیفایر مطمئن هستید؟')) return;
+    const res = await deleteModifierGroup(groupId);
+    if (res.success) {
+      fetchModifierGroups();
+    } else {
+      alert(res.error || 'خطا در حذف گروه مدیفایر');
     }
   };
 
@@ -669,6 +1042,26 @@ export default function AdminPage() {
               }`}
             >
               💰 قیمت تمام‌شده
+            </button>
+            <button
+              onClick={() => setActiveTab('subrecipes')}
+              className={`px-6 py-3 font-bold text-sm transition-colors border-b-2 -mb-px ${
+                activeTab === 'subrecipes'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              🥣 زیرفرمول‌ها
+            </button>
+            <button
+              onClick={() => setActiveTab('modifiers')}
+              className={`px-6 py-3 font-bold text-sm transition-colors border-b-2 -mb-px ${
+                activeTab === 'modifiers'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              ➕ مدیفایرها
             </button>
             <button
               onClick={() => setActiveTab('settings')}
@@ -1134,6 +1527,128 @@ export default function AdminPage() {
         </div>
       )}
 
+      {/* -------------------- SUB-RECIPES TAB (فاز ۱۳) -------------------- */}
+      {activeTab === 'subrecipes' && (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-300">
+          <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+            <div>
+              <h2 className="text-lg font-bold text-gray-800">زیرفرمول‌ها (Sub-recipes)</h2>
+              <p className="text-xs text-gray-500 mt-0.5">آماده‌سازی‌های میانی (مثل سس یا خمیر پایه) که می‌توانند در فرمول چند آیتم منو استفاده شوند</p>
+            </div>
+            <button
+              onClick={openNewSubRecipeModal}
+              className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition-all shadow-sm hover:shadow flex items-center gap-2 text-sm"
+            >
+              ➕ زیرفرمول جدید
+            </button>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+            {isLoadingSubRecipes ? (
+              <div className="text-center text-gray-500 text-sm py-10 animate-pulse">درحال بارگذاری...</div>
+            ) : subRecipeList.length === 0 ? (
+              <div className="text-center text-gray-400 text-sm py-10">هنوز زیرفرمولی ثبت نشده است.</div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-gray-500 text-xs">
+                  <tr>
+                    <th className="px-6 py-3 text-right font-bold">نام</th>
+                    <th className="px-6 py-3 text-right font-bold">واحد</th>
+                    <th className="px-6 py-3 text-right font-bold">تعداد ردیف فرمول</th>
+                    <th className="px-6 py-3 text-center font-bold">عملیات</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {subRecipeList.map(sr => (
+                    <tr key={sr.id} className="hover:bg-gray-50">
+                      <td className="px-6 py-3 font-semibold text-gray-800">{sr.name}</td>
+                      <td className="px-6 py-3 text-gray-500">{sr.unit || '—'}</td>
+                      <td className="px-6 py-3 text-gray-500">{toPersianDigits(sr._count.items)}</td>
+                      <td className="px-6 py-3 text-center">
+                        <button
+                          onClick={() => openEditSubRecipeModal(sr.id)}
+                          className="text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-md transition-colors text-xs font-semibold ml-2"
+                        >
+                          ویرایش
+                        </button>
+                        <button
+                          onClick={() => handleDeleteSubRecipe(sr.id)}
+                          className="text-red-600 hover:text-red-800 bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-md transition-colors text-xs font-semibold"
+                        >
+                          حذف
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* -------------------- MODIFIER GROUPS TAB (فاز ۱۳) -------------------- */}
+      {activeTab === 'modifiers' && (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-300">
+          <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+            <div>
+              <h2 className="text-lg font-bold text-gray-800">گروه‌های مدیفایر/افزودنی</h2>
+              <p className="text-xs text-gray-500 mt-0.5">مثل «افزودنی‌های پیتزا» یا «سطح تندی» — قابل اتصال به یک یا چند آیتم منو از داخل مودال فرمول غذای همان آیتم</p>
+            </div>
+            <button
+              onClick={openNewModifierGroupModal}
+              className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition-all shadow-sm hover:shadow flex items-center gap-2 text-sm"
+            >
+              ➕ گروه مدیفایر جدید
+            </button>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+            {isLoadingModifierGroups ? (
+              <div className="text-center text-gray-500 text-sm py-10 animate-pulse">درحال بارگذاری...</div>
+            ) : modifierGroups.length === 0 ? (
+              <div className="text-center text-gray-400 text-sm py-10">هنوز گروه مدیفایری ثبت نشده است.</div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-gray-500 text-xs">
+                  <tr>
+                    <th className="px-6 py-3 text-right font-bold">نام گروه</th>
+                    <th className="px-6 py-3 text-right font-bold">حداقل/حداکثر انتخاب</th>
+                    <th className="px-6 py-3 text-right font-bold">تعداد مدیفایر</th>
+                    <th className="px-6 py-3 text-right font-bold">تعداد آیتم منوی متصل</th>
+                    <th className="px-6 py-3 text-center font-bold">عملیات</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {modifierGroups.map(g => (
+                    <tr key={g.id} className="hover:bg-gray-50">
+                      <td className="px-6 py-3 font-semibold text-gray-800">{g.name}</td>
+                      <td className="px-6 py-3 text-gray-500" dir="ltr">{toPersianDigits(g.minSelect)} .. {toPersianDigits(g.maxSelect)}</td>
+                      <td className="px-6 py-3 text-gray-500">{toPersianDigits(g.modifiers.length)}</td>
+                      <td className="px-6 py-3 text-gray-500">{toPersianDigits(g._count.menuItems)}</td>
+                      <td className="px-6 py-3 text-center">
+                        <button
+                          onClick={() => openEditModifierGroupModal(g)}
+                          className="text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-md transition-colors text-xs font-semibold ml-2"
+                        >
+                          ویرایش
+                        </button>
+                        <button
+                          onClick={() => handleDeleteModifierGroup(g.id)}
+                          className="text-red-600 hover:text-red-800 bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-md transition-colors text-xs font-semibold"
+                        >
+                          حذف
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* -------------------- RECIPE MODAL (For Cost Analysis Tab) -------------------- */}
       {isRecipeModalOpen && activeTab === 'costing' && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -1154,46 +1669,97 @@ export default function AdminPage() {
                   <div className="space-y-3">
                     {recipeLines.map((line, index) => {
                       const inv = recipeInventoryItems.find(i => i.id === line.inventoryItemId);
+                      const isSubRecipeLine = !!line.subRecipeId;
                       return (
-                        <div key={index} className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl p-3">
-                          <select
-                            value={line.inventoryItemId}
-                            onChange={e => updateRecipeLine(index, 'inventoryItemId', e.target.value)}
-                            className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white outline-none focus:border-blue-500"
-                          >
-                            <option value="">— انتخاب کالای انبار —</option>
-                            {recipeInventoryItems.map(inv => (
-                              <option key={inv.id} value={inv.id}>{inv.name} ({inv.unit})</option>
-                            ))}
-                          </select>
-                          <input
-                            type="number"
-                            step="any"
-                            placeholder="مقدار"
-                            value={line.quantity || ''}
-                            onChange={e => updateRecipeLine(index, 'quantity', parseFloat(e.target.value) || 0)}
-                            className="w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm text-left outline-none focus:border-blue-500"
-                            dir="ltr"
-                          />
-                          {inv && (
-                            <div className="w-40 flex items-center gap-1 text-xs text-gray-500">
-                              <span>قیمت واحد:</span>
+                        <div key={index} className="flex flex-col gap-2 bg-gray-50 border border-gray-200 rounded-xl p-3">
+                          <div className="flex items-center gap-2">
+                            <select
+                              value={isSubRecipeLine ? 'sub' : 'ingredient'}
+                              onChange={e => {
+                                if (e.target.value === 'sub') {
+                                  updateRecipeLine(index, 'subRecipeId', line.subRecipeId || recipeSubRecipeOptions[0]?.id || '');
+                                } else {
+                                  updateRecipeLine(index, 'inventoryItemId', line.inventoryItemId || recipeInventoryItems[0]?.id || '');
+                                }
+                              }}
+                              className="w-32 border border-gray-300 rounded-lg px-2 py-2 text-xs bg-white outline-none focus:border-blue-500"
+                            >
+                              <option value="ingredient">ماده اولیه</option>
+                              <option value="sub">زیرفرمول</option>
+                            </select>
+
+                            {isSubRecipeLine ? (
+                              <select
+                                value={line.subRecipeId}
+                                onChange={e => updateRecipeLine(index, 'subRecipeId', e.target.value)}
+                                className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white outline-none focus:border-blue-500"
+                              >
+                                <option value="">— انتخاب زیرفرمول —</option>
+                                {recipeSubRecipeOptions.map(sr => (
+                                  <option key={sr.id} value={sr.id}>{sr.name} {sr.unit ? `(${sr.unit})` : ''}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <select
+                                value={line.inventoryItemId}
+                                onChange={e => updateRecipeLine(index, 'inventoryItemId', e.target.value)}
+                                className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white outline-none focus:border-blue-500"
+                              >
+                                <option value="">— انتخاب کالای انبار —</option>
+                                {recipeInventoryItems.map(inv => (
+                                  <option key={inv.id} value={inv.id}>{inv.name} ({inv.unit})</option>
+                                ))}
+                              </select>
+                            )}
+                            <input
+                              type="number"
+                              step="any"
+                              placeholder="مقدار"
+                              value={line.quantity || ''}
+                              onChange={e => updateRecipeLine(index, 'quantity', parseFloat(e.target.value) || 0)}
+                              className="w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm text-left outline-none focus:border-blue-500"
+                              dir="ltr"
+                            />
+                            <button
+                              onClick={() => removeRecipeLine(index)}
+                              className="text-red-500 hover:text-red-700 px-2 text-sm"
+                            >
+                              حذف
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-2 pr-1">
+                            <label className="text-xs text-gray-500 flex items-center gap-1">
+                              <span>درصد بازده (yield%):</span>
                               <input
                                 type="number"
                                 step="any"
-                                value={inv.costPerUnit || ''}
-                                onChange={e => updateIngredientCostLocal(inv.id, parseFloat(e.target.value) || 0)}
-                                className="w-20 border border-gray-300 rounded-lg px-2 py-1.5 text-xs text-left outline-none focus:border-blue-500"
+                                min={1}
+                                max={100}
+                                value={line.yieldPercent || 100}
+                                onChange={e => updateRecipeLine(index, 'yieldPercent', parseFloat(e.target.value) || 100)}
+                                className="w-16 border border-gray-300 rounded-lg px-2 py-1 text-xs text-left outline-none focus:border-blue-500"
                                 dir="ltr"
                               />
-                            </div>
-                          )}
-                          <button
-                            onClick={() => removeRecipeLine(index)}
-                            className="text-red-500 hover:text-red-700 px-2 text-sm"
-                          >
-                            حذف
-                          </button>
+                            </label>
+                            {!isSubRecipeLine && inv && (
+                              <div className="flex items-center gap-1 text-xs text-gray-500">
+                                <span>قیمت واحد:</span>
+                                <input
+                                  type="number"
+                                  step="any"
+                                  value={inv.costPerUnit || ''}
+                                  onChange={e => updateIngredientCostLocal(inv.id, parseFloat(e.target.value) || 0)}
+                                  className="w-20 border border-gray-300 rounded-lg px-2 py-1.5 text-xs text-left outline-none focus:border-blue-500"
+                                  dir="ltr"
+                                />
+                              </div>
+                            )}
+                            {isSubRecipeLine && line.subRecipeId && (
+                              <span className="text-xs text-gray-400">
+                                هزینه‌ی هر واحد زیرفرمول: {formatCurrency(Math.round(recipeSubRecipeOptions.find(s => s.id === line.subRecipeId)?.costPerUnit || 0))} تومان
+                              </span>
+                            )}
+                          </div>
                         </div>
                       );
                     })}
@@ -1206,12 +1772,50 @@ export default function AdminPage() {
                     onClick={addRecipeLine}
                     className="w-full border-2 border-dashed border-gray-300 hover:border-blue-400 hover:text-blue-600 text-gray-500 rounded-xl py-2.5 text-sm font-semibold transition-colors"
                   >
-                    ➕ افزودن ماده اولیه
+                    ➕ افزودن ردیف فرمول
                   </button>
 
                   <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 flex justify-between items-center">
                     <span className="text-sm font-bold text-blue-900">هزینه تمام‌شده محاسبه‌شده:</span>
                     <span className="text-lg font-black text-blue-900">{formatCurrency(Math.round(computeRecipeCost()))} تومان</span>
+                  </div>
+
+                  {/* فاز ۱۳: اختصاصِ گروه‌های مدیفایر/افزودنی به همین آیتم منو */}
+                  <div className="border border-gray-200 rounded-xl p-4 space-y-3">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm font-bold text-gray-800">گروه‌های مدیفایر/افزودنیِ این آیتم</span>
+                      <button
+                        onClick={handleSaveRecipeModifierGroups}
+                        disabled={isSavingRecipeModifierGroups}
+                        className="text-xs font-bold text-blue-600 hover:text-blue-800 disabled:opacity-60"
+                      >
+                        {isSavingRecipeModifierGroups ? 'درحال ذخیره...' : '💾 ذخیره گروه‌های مدیفایر'}
+                      </button>
+                    </div>
+                    {recipeAllModifierGroups.length === 0 ? (
+                      <p className="text-xs text-gray-400">هنوز گروه مدیفایری تعریف نشده (از تب «مدیفایرها» بسازید).</p>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        {recipeAllModifierGroups.map(g => (
+                          <label
+                            key={g.id}
+                            className={`flex items-center gap-1.5 border rounded-lg px-3 py-1.5 text-xs cursor-pointer transition-colors ${
+                              recipeSelectedModifierGroupIds.includes(g.id)
+                                ? 'border-blue-500 bg-blue-50 text-blue-700 font-bold'
+                                : 'border-gray-300 text-gray-600 hover:border-gray-400'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={recipeSelectedModifierGroupIds.includes(g.id)}
+                              onChange={() => handleToggleRecipeModifierGroup(g.id)}
+                              className="hidden"
+                            />
+                            {g.name}
+                          </label>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </>
               )}
@@ -1227,6 +1831,291 @@ export default function AdminPage() {
                 className="px-5 py-2 rounded-lg text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-60 transition-colors"
               >
                 {isSavingRecipe ? 'درحال ذخیره...' : 'ذخیره فرمول'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* -------------------- SUB-RECIPE MODAL (فاز ۱۳) -------------------- */}
+      {isSubRecipeModalOpen && activeTab === 'subrecipes' && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200">
+            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+              <h3 className="font-bold text-gray-900">{editingSubRecipeId ? 'ویرایش زیرفرمول' : 'زیرفرمول جدید'}</h3>
+              <button onClick={closeSubRecipeModal} className="text-gray-400 hover:text-gray-700 text-xl leading-none">✕</button>
+            </div>
+
+            <div className="p-6 overflow-y-auto flex-1 space-y-4">
+              {isLoadingSubRecipeDetail ? (
+                <div className="text-center text-gray-500 text-sm py-8 animate-pulse">درحال بارگذاری...</div>
+              ) : (
+                <>
+                  {subRecipeError && (
+                    <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3">{subRecipeError}</div>
+                  )}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-gray-600 mb-1">نام زیرفرمول</label>
+                      <input
+                        type="text"
+                        value={subRecipeName}
+                        onChange={e => setSubRecipeName(e.target.value)}
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-gray-600 mb-1">واحد (نمایشی)</label>
+                      <input
+                        type="text"
+                        value={subRecipeUnit}
+                        onChange={e => setSubRecipeUnit(e.target.value)}
+                        placeholder="مثلاً کیلوگرم"
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-600 mb-1">یادداشت</label>
+                    <input
+                      type="text"
+                      value={subRecipeNotes}
+                      onChange={e => setSubRecipeNotes(e.target.value)}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500"
+                    />
+                  </div>
+
+                  <div className="space-y-3">
+                    <p className="text-xs font-bold text-gray-600">این زیرفرمول از چه چیزی ساخته می‌شود؟</p>
+                    {subRecipeLines.map((line, index) => {
+                      const isChild = !!line.childSubRecipeId;
+                      return (
+                        <div key={index} className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl p-3">
+                          <select
+                            value={isChild ? 'sub' : 'ingredient'}
+                            onChange={e => {
+                              if (e.target.value === 'sub') {
+                                updateSubRecipeLine(index, 'childSubRecipeId', line.childSubRecipeId || subRecipeOtherOptions[0]?.id || '');
+                              } else {
+                                updateSubRecipeLine(index, 'inventoryItemId', line.inventoryItemId || subRecipeInventoryOptions[0]?.id || '');
+                              }
+                            }}
+                            className="w-32 border border-gray-300 rounded-lg px-2 py-2 text-xs bg-white outline-none focus:border-blue-500"
+                          >
+                            <option value="ingredient">ماده اولیه</option>
+                            <option value="sub">زیرفرمول دیگر</option>
+                          </select>
+                          {isChild ? (
+                            <select
+                              value={line.childSubRecipeId}
+                              onChange={e => updateSubRecipeLine(index, 'childSubRecipeId', e.target.value)}
+                              className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white outline-none focus:border-blue-500"
+                            >
+                              <option value="">— انتخاب زیرفرمول —</option>
+                              {subRecipeOtherOptions.map(s => (
+                                <option key={s.id} value={s.id}>{s.name}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <select
+                              value={line.inventoryItemId}
+                              onChange={e => updateSubRecipeLine(index, 'inventoryItemId', e.target.value)}
+                              className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white outline-none focus:border-blue-500"
+                            >
+                              <option value="">— انتخاب کالای انبار —</option>
+                              {subRecipeInventoryOptions.map(inv => (
+                                <option key={inv.id} value={inv.id}>{inv.name} ({inv.unit})</option>
+                              ))}
+                            </select>
+                          )}
+                          <input
+                            type="number"
+                            step="any"
+                            placeholder="مقدار"
+                            value={line.quantity || ''}
+                            onChange={e => updateSubRecipeLine(index, 'quantity', parseFloat(e.target.value) || 0)}
+                            className="w-20 border border-gray-300 rounded-lg px-3 py-2 text-sm text-left outline-none focus:border-blue-500"
+                            dir="ltr"
+                          />
+                          <input
+                            type="number"
+                            step="any"
+                            min={1}
+                            max={100}
+                            title="درصد بازده"
+                            placeholder="بازده%"
+                            value={line.yieldPercent || 100}
+                            onChange={e => updateSubRecipeLine(index, 'yieldPercent', parseFloat(e.target.value) || 100)}
+                            className="w-20 border border-gray-300 rounded-lg px-3 py-2 text-sm text-left outline-none focus:border-blue-500"
+                            dir="ltr"
+                          />
+                          <button
+                            onClick={() => removeSubRecipeLine(index)}
+                            className="text-red-500 hover:text-red-700 px-2 text-sm"
+                          >
+                            حذف
+                          </button>
+                        </div>
+                      );
+                    })}
+                    {subRecipeLines.length === 0 && (
+                      <p className="text-center text-gray-400 text-sm py-4">هنوز موردی اضافه نشده است.</p>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={addSubRecipeLine}
+                    className="w-full border-2 border-dashed border-gray-300 hover:border-blue-400 hover:text-blue-600 text-gray-500 rounded-xl py-2.5 text-sm font-semibold transition-colors"
+                  >
+                    ➕ افزودن ردیف
+                  </button>
+                </>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
+              <button onClick={closeSubRecipeModal} className="px-4 py-2 rounded-lg text-sm font-bold text-gray-600 hover:bg-gray-200 transition-colors">
+                انصراف
+              </button>
+              <button
+                onClick={handleSaveSubRecipe}
+                disabled={isSavingSubRecipe}
+                className="px-5 py-2 rounded-lg text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-60 transition-colors"
+              >
+                {isSavingSubRecipe ? 'درحال ذخیره...' : 'ذخیره زیرفرمول'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* -------------------- MODIFIER GROUP MODAL (فاز ۱۳) -------------------- */}
+      {isModifierGroupModalOpen && activeTab === 'modifiers' && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200">
+            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+              <h3 className="font-bold text-gray-900">{editingModifierGroupId ? 'ویرایش گروه مدیفایر' : 'گروه مدیفایر جدید'}</h3>
+              <button onClick={closeModifierGroupModal} className="text-gray-400 hover:text-gray-700 text-xl leading-none">✕</button>
+            </div>
+
+            <div className="p-6 overflow-y-auto flex-1 space-y-4">
+              {modifierGroupError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3">{modifierGroupError}</div>
+              )}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="col-span-1">
+                  <label className="block text-xs font-bold text-gray-600 mb-1">نام گروه</label>
+                  <input
+                    type="text"
+                    value={modifierGroupName}
+                    onChange={e => setModifierGroupName(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-600 mb-1">حداقل انتخاب</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={modifierGroupMinSelect}
+                    onChange={e => setModifierGroupMinSelect(parseInt(e.target.value) || 0)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-left outline-none focus:border-blue-500"
+                    dir="ltr"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-600 mb-1">حداکثر انتخاب</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={modifierGroupMaxSelect}
+                    onChange={e => setModifierGroupMaxSelect(parseInt(e.target.value) || 1)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-left outline-none focus:border-blue-500"
+                    dir="ltr"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <p className="text-xs font-bold text-gray-600">مدیفایرهای این گروه</p>
+                {modifierGroupModifiers.map((m, mIndex) => (
+                  <div key={m.id || `new-${mIndex}`} className="border border-gray-200 rounded-xl p-3 space-y-2 bg-gray-50">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        placeholder="نام مدیفایر (مثلاً «پنیر اضافه»)"
+                        value={m.name}
+                        onChange={e => updateModifierRow(mIndex, 'name', e.target.value)}
+                        className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500"
+                      />
+                      <input
+                        type="number"
+                        step="any"
+                        placeholder="افزایش قیمت"
+                        value={m.priceDelta || ''}
+                        onChange={e => updateModifierRow(mIndex, 'priceDelta', parseFloat(e.target.value) || 0)}
+                        className="w-32 border border-gray-300 rounded-lg px-3 py-2 text-sm text-left outline-none focus:border-blue-500"
+                        dir="ltr"
+                      />
+                      <button onClick={() => removeModifierRow(mIndex)} className="text-red-500 hover:text-red-700 px-2 text-sm">حذف</button>
+                    </div>
+                    <div className="pr-4 space-y-1.5">
+                      <p className="text-[11px] text-gray-400">اثر روی موجودی (مثبت = مصرف اضافه، منفی = کسر از فرمول پایه):</p>
+                      {m.recipeLines.map((rl, rlIndex) => (
+                        <div key={rlIndex} className="flex items-center gap-2">
+                          <select
+                            value={rl.inventoryItemId}
+                            onChange={e => updateModifierRecipeLine(mIndex, rlIndex, 'inventoryItemId', e.target.value)}
+                            className="flex-1 border border-gray-300 rounded-lg px-2 py-1.5 text-xs bg-white outline-none focus:border-blue-500"
+                          >
+                            <option value="">— انتخاب کالای انبار —</option>
+                            {recipeInventoryItems.map(inv => (
+                              <option key={inv.id} value={inv.id}>{inv.name} ({inv.unit})</option>
+                            ))}
+                          </select>
+                          <input
+                            type="number"
+                            step="any"
+                            placeholder="مقدار (± )"
+                            value={rl.quantity || ''}
+                            onChange={e => updateModifierRecipeLine(mIndex, rlIndex, 'quantity', parseFloat(e.target.value) || 0)}
+                            className="w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-xs text-left outline-none focus:border-blue-500"
+                            dir="ltr"
+                          />
+                          <button onClick={() => removeModifierRecipeLine(mIndex, rlIndex)} className="text-red-400 hover:text-red-600 text-xs px-1">✕</button>
+                        </div>
+                      ))}
+                      <button
+                        onClick={() => addModifierRecipeLine(mIndex)}
+                        className="text-xs text-blue-600 hover:text-blue-800 font-semibold"
+                      >
+                        ➕ افزودن اثر روی موجودی
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {modifierGroupModifiers.length === 0 && (
+                  <p className="text-center text-gray-400 text-sm py-4">هنوز مدیفایری اضافه نشده است.</p>
+                )}
+                <button
+                  onClick={addModifierRow}
+                  className="w-full border-2 border-dashed border-gray-300 hover:border-blue-400 hover:text-blue-600 text-gray-500 rounded-xl py-2.5 text-sm font-semibold transition-colors"
+                >
+                  ➕ افزودن مدیفایر
+                </button>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
+              <button onClick={closeModifierGroupModal} className="px-4 py-2 rounded-lg text-sm font-bold text-gray-600 hover:bg-gray-200 transition-colors">
+                انصراف
+              </button>
+              <button
+                onClick={handleSaveModifierGroup}
+                disabled={isSavingModifierGroup}
+                className="px-5 py-2 rounded-lg text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-60 transition-colors"
+              >
+                {isSavingModifierGroup ? 'درحال ذخیره...' : 'ذخیره گروه مدیفایر'}
               </button>
             </div>
           </div>

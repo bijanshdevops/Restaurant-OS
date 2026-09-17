@@ -39,6 +39,14 @@ import {
 } from '@/app/actions/delivery';
 import { getInventoryItems, createInventoryItem, restockInventoryItem } from '@/app/actions/inventory';
 import { getMenuCostAnalysis, getMenuItemRecipe, saveMenuItemRecipe, updateInventoryItemCost } from '@/app/actions/costing';
+import { getSubRecipes, getSubRecipeDetail, saveSubRecipe, deleteSubRecipe } from '@/app/actions/subRecipe';
+import {
+  getModifierGroups,
+  saveModifierGroup,
+  deleteModifierGroup,
+  getMenuItemModifierGroups,
+  setMenuItemModifierGroups,
+} from '@/app/actions/modifiers';
 import {
   getTransactions,
   createExpense,
@@ -175,6 +183,15 @@ const actions: Record<string, (...args: any[]) => Promise<any>> = {
   getMenuItemRecipe,
   saveMenuItemRecipe,
   updateInventoryItemCost,
+  getSubRecipes,
+  getSubRecipeDetail,
+  saveSubRecipe,
+  deleteSubRecipe,
+  getModifierGroups,
+  saveModifierGroup,
+  deleteModifierGroup,
+  getMenuItemModifierGroups,
+  setMenuItemModifierGroups,
   getTransactions,
   createExpense,
   createIncome,

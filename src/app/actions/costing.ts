@@ -2,6 +2,7 @@
 
 import { prisma } from '@/lib/prisma';
 import { requireRole } from '@/lib/auth';
+import { expandMenuItemBaseUsage, expandSubRecipeUsagePerUnit } from '@/lib/recipeExpansion';
 
 /**
  * فرمول غذا (BOM) و منو در سراسر شعبه‌ها مشترک است، اما از فاز ۵
@@ -9,6 +10,13 @@ import { requireRole } from '@/lib/auth';
  * BranchInventoryStock و مخصوص هر شعبه است. آنالیز قیمت تمام‌شده همیشه
  * نسبت به یک شعبه‌ی مشخص محاسبه می‌شود — اگر صریحاً داده نشود، شعبه‌ی خودِ
  * کاربر (این محدودیت شناخته‌شده در README مستند شده است).
+ *
+ * از فاز ۱۳ به بعد، این محاسبه از همان تابعِ بسطِ فرمولِ کاملِ recipeExpansion
+ * استفاده می‌کند (نه پیمایشِ ساده‌ی یک‌سطحیِ recipeItems) تا درصد بازده
+ * (yield %) و هزینه‌ی زیرفرمول‌های تودرتو هم به‌درستی در قیمت تمام‌شده لحاظ
+ * شوند — مدیفایرهای انتخابیِ مشتری عمداً در این آنالیزِ «آیتمِ پایه» دخیل
+ * نیستند، چون مدیفایر یک انتخابِ لحظه‌ی سفارش است، نه بخشی از فرمولِ ثابتِ
+ * خودِ آیتم.
  */
 
 export async function getMenuCostAnalysis(branchId?: string) {
@@ -17,38 +25,38 @@ export async function getMenuCostAnalysis(branchId?: string) {
   const effectiveBranchId = branchId || auth.user.branchId;
 
   try {
-    const items = await prisma.menuItem.findMany({
-      orderBy: { title: 'asc' },
-      include: {
-        recipeItems: {
-          include: {
-            inventoryItem: {
-              include: { branchStocks: { where: { branchId: effectiveBranchId } } },
-            },
-          },
-        },
-      },
-    });
+    const [items, branchStocks] = await Promise.all([
+      prisma.menuItem.findMany({
+        orderBy: { title: 'asc' },
+        include: { recipeItems: true },
+      }),
+      prisma.branchInventoryStock.findMany({ where: { branchId: effectiveBranchId } }),
+    ]);
 
-    const analysis = items.map((item) => {
-      const cost = item.recipeItems.reduce((sum, ri) => {
-        const costPerUnit = ri.inventoryItem.branchStocks[0]?.costPerUnit ?? 0;
-        return sum + ri.quantity * costPerUnit;
-      }, 0);
-      const profit = item.price - cost;
-      const marginPercent = item.price > 0 ? (profit / item.price) * 100 : 0;
+    const costPerUnitMap = new Map(branchStocks.map((s) => [s.inventoryItemId, s.costPerUnit]));
 
-      return {
-        id: item.id,
-        title: item.title,
-        category: item.category,
-        price: item.price,
-        cost,
-        profit,
-        marginPercent,
-        ingredientCount: item.recipeItems.length,
-      };
-    });
+    const analysis = await Promise.all(
+      items.map(async (item) => {
+        const usage = await expandMenuItemBaseUsage(item.id);
+        let cost = 0;
+        for (const [inventoryItemId, qty] of usage) {
+          cost += qty * (costPerUnitMap.get(inventoryItemId) ?? 0);
+        }
+        const profit = item.price - cost;
+        const marginPercent = item.price > 0 ? (profit / item.price) * 100 : 0;
+
+        return {
+          id: item.id,
+          title: item.title,
+          category: item.category,
+          price: item.price,
+          cost,
+          profit,
+          marginPercent,
+          ingredientCount: item.recipeItems.length,
+        };
+      })
+    );
 
     return { success: true, items: analysis, branchId: effectiveBranchId };
   } catch (error) {
@@ -63,7 +71,7 @@ export async function getMenuItemRecipe(menuItemId: string, branchId?: string) {
   const effectiveBranchId = branchId || auth.user.branchId;
 
   try {
-    const [menuItem, stocks, recipeItems] = await Promise.all([
+    const [menuItem, stocks, recipeItems, subRecipes] = await Promise.all([
       prisma.menuItem.findUnique({ where: { id: menuItemId } }),
       prisma.branchInventoryStock.findMany({
         where: { branchId: effectiveBranchId },
@@ -72,8 +80,10 @@ export async function getMenuItemRecipe(menuItemId: string, branchId?: string) {
       }),
       prisma.recipeItem.findMany({
         where: { menuItemId },
-        include: { inventoryItem: true },
+        include: { inventoryItem: true, subRecipe: true },
       }),
+      // فاز ۱۳: فهرست زیرفرمول‌ها برای انتخاب به‌عنوان «ماده‌ی اولیه»
+      prisma.subRecipe.findMany({ orderBy: { name: 'asc' } }),
     ]);
 
     if (!menuItem) {
@@ -89,24 +99,66 @@ export async function getMenuItemRecipe(menuItemId: string, branchId?: string) {
       costPerUnit: s.costPerUnit,
     }));
 
-    return { success: true, menuItem, inventoryItems, recipeItems, branchId: effectiveBranchId };
+    // هزینه‌ی تمام‌شده‌ی خودِ هر زیرفرمول (به‌ازای یک واحد) هم همین‌جا
+    // محاسبه و ضمیمه می‌شود — رابط کاربری برای محاسبه‌ی هزینه‌ی یک ردیفِ
+    // فرمول که «ماده‌ی اولیه‌اش» یک زیرفرمول است، نیازی به تکرارِ منطقِ
+    // بسطِ بازگشتی نداشته باشد.
+    const costPerUnitMap = new Map(inventoryItems.map((i) => [i.id, i.costPerUnit]));
+    const subRecipesWithCost = await Promise.all(
+      subRecipes.map(async (sr) => {
+        const usage = await expandSubRecipeUsagePerUnit(sr.id);
+        let cost = 0;
+        for (const [invId, qty] of usage) {
+          cost += qty * (costPerUnitMap.get(invId) ?? 0);
+        }
+        return { ...sr, costPerUnit: cost };
+      })
+    );
+
+    return {
+      success: true,
+      menuItem,
+      inventoryItems,
+      recipeItems,
+      subRecipes: subRecipesWithCost,
+      branchId: effectiveBranchId,
+    };
   } catch (error) {
     console.error('Error fetching menu item recipe:', error);
     return { success: false, error: 'Failed to fetch recipe' };
   }
 }
 
-export async function saveMenuItemRecipe(
-  menuItemId: string,
-  lines: { inventoryItemId: string; quantity: number }[]
-) {
+interface RecipeLineInput {
+  inventoryItemId?: string;
+  subRecipeId?: string;
+  quantity: number;
+  yieldPercent?: number;
+}
+
+/**
+ * از فاز ۱۳ به بعد، هر ردیف دقیقاً یکی از inventoryItemId/subRecipeId را
+ * دارد (نه هر دو، نه هیچ‌کدام) و می‌تواند یک yieldPercent اختیاری (پیش‌فرض
+ * ۱۰۰ = بدون ضایعات) داشته باشد. خطوطی که این شرط را نداشته باشند نادیده
+ * گرفته می‌شوند (همان رفتار قبلیِ «فیلتر کردن ردیف‌های ناقص»).
+ */
+export async function saveMenuItemRecipe(menuItemId: string, lines: RecipeLineInput[]) {
   const auth = await requireRole('ADMIN');
   if (!auth.ok) return { success: false, error: auth.error };
 
   try {
-    const validLines = lines.filter(
-      (l) => l.inventoryItemId && l.quantity > 0
-    );
+    const validLines = lines.filter((l) => {
+      const hasIngredient = !!l.inventoryItemId;
+      const hasSubRecipe = !!l.subRecipeId;
+      return (hasIngredient !== hasSubRecipe) && l.quantity > 0;
+    });
+
+    for (const line of validLines) {
+      const yp = line.yieldPercent ?? 100;
+      if (!Number.isFinite(yp) || yp <= 0 || yp > 100) {
+        return { success: false, error: 'درصد بازده باید عددی بین ۱ تا ۱۰۰ باشد' };
+      }
+    }
 
     await prisma.$transaction([
       prisma.recipeItem.deleteMany({ where: { menuItemId } }),
@@ -115,8 +167,10 @@ export async function saveMenuItemRecipe(
             prisma.recipeItem.createMany({
               data: validLines.map((l) => ({
                 menuItemId,
-                inventoryItemId: l.inventoryItemId,
+                inventoryItemId: l.inventoryItemId || null,
+                subRecipeId: l.subRecipeId || null,
                 quantity: l.quantity,
+                yieldPercent: l.yieldPercent ?? 100,
               })),
             }),
           ]

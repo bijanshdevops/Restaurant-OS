@@ -107,7 +107,17 @@ export async function createRefund(input: CreateRefundInput) {
     const refund = await prisma.$transaction(async (tx) => {
       const order = await tx.order.findUnique({
         where: { id: input.orderId },
-        include: { items: { include: { menuItem: { include: { recipeItems: true } } } } },
+        include: {
+          items: {
+            include: {
+              menuItem: { select: { id: true, title: true } },
+              // فاز ۱۳: برگردانِ موجودی از رویِ عکسِ لحظه‌ایِ مصرفِ ثبت‌شده در
+              // لحظه‌ی سفارش، نه فرمولِ زنده‌ی فعلی — نک. توضیحِ کاملِ زیرِ
+              // بخشِ «۳» همین تابع.
+              ingredientUsages: true,
+            },
+          },
+        },
       });
       if (!order) throw new Error('سفارش یافت نشد');
       if (order.status !== 'COMPLETED') {
@@ -192,17 +202,24 @@ export async function createRefund(input: CreateRefundInput) {
         });
       }
 
-      // 3. برگشت موجودی انبار طبق فرمول غذا (BOM) هر قلم مرجوع‌شده — به
-      // شعبه‌ی خود سفارش، یا شعبه‌ی پیش‌فرض برای سفارش آنلاینِ بدون‌شعبه
-      // (نک. finalizeOnlineOrderAfterPayment برای همین قاعده در کسر اولیه).
+      // 3. برگشت موجودی انبار طبق عکسِ لحظه‌ایِ مصرفِ ثبت‌شده در لحظه‌ی خودِ
+      // سفارش (OrderItemIngredientUsage) — نه فرمولِ زنده‌ی فعلیِ آیتمِ منو
+      // (فاز ۱۳). این یک اشکالِ نهفته‌ی قبلی را برطرف می‌کند: قبلاً این
+      // بخش دوباره از رویِ فرمولِ زنده‌ی MenuItem.recipeItems محاسبه
+      // می‌کرد، پس اگر فرمول (یا مدیفایر/درصدِ بازده) بینِ ثبتِ سفارش و
+      // مرجوعی تغییر می‌کرد، مقدارِ نادرستی به انبار برمی‌گشت. حالا دقیقاً
+      // همان مقداری که واقعاً در لحظه‌ی سفارش کسر شده بود برمی‌گردد —
+      // صرفِ‌نظر از هر تغییرِ بعدیِ فرمول. به شعبه‌ی خود سفارش، یا شعبه‌ی
+      // پیش‌فرض برای سفارش آنلاینِ بدون‌شعبه (نک.
+      // finalizeOnlineOrderAfterPayment برای همین قاعده در کسر اولیه).
       const branchIdForStock = order.branchId ?? (await getDefaultBranchId());
       const stockRestocks = new Map<string, number>();
       for (const line of refundLines) {
-        for (const recipeLine of line.orderItem.menuItem.recipeItems) {
-          const amount = recipeLine.quantity * line.qty;
+        for (const usage of line.orderItem.ingredientUsages) {
+          const amount = usage.quantityPerUnit * line.qty;
           stockRestocks.set(
-            recipeLine.inventoryItemId,
-            (stockRestocks.get(recipeLine.inventoryItemId) || 0) + amount
+            usage.inventoryItemId,
+            (stockRestocks.get(usage.inventoryItemId) || 0) + amount
           );
         }
       }

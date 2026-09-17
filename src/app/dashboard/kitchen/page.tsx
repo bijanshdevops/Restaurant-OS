@@ -1,14 +1,20 @@
 "use client";
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { getActiveOrders, updateOrderStatus } from '@/app/actions/order';
 import { OrderStatus } from '@prisma/client';
+
+// نام ایستگاه عمومی: هر آیتمی که در تعریف منو ایستگاه آشپزخانه‌ی مشخصی
+// نداشته باشد، اینجا قرار می‌گیرد.
+const GENERAL_STATION = 'عمومی';
+const ALL_STATIONS = '__ALL__';
 
 // Map Prisma types to component state types
 interface OrderItem {
   id: string;
   name: string;
   quantity: number;
+  station: string;
 }
 
 interface Order {
@@ -23,6 +29,7 @@ export default function KitchenPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [, setTick] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
+  const [activeStation, setActiveStation] = useState<string>(ALL_STATIONS);
 
   // Fetch orders from the server
   const fetchOrders = useCallback(async () => {
@@ -37,6 +44,7 @@ export default function KitchenPage() {
           id: item.id,
           name: item.menuItem.title,
           quantity: item.quantity,
+          station: item.menuItem.kitchenStation?.trim() || GENERAL_STATION,
         })),
       }));
       setOrders(mappedOrders);
@@ -63,6 +71,41 @@ export default function KitchenPage() {
       clearInterval(tickInterval);
     };
   }, [fetchOrders]);
+
+  // فهرست ایستگاه‌های موجود، به‌صورت پویا از روی آیتم‌های سفارش‌های فعال
+  // فعلی محاسبه می‌شود — یک موجودیت مدیریت‌شده‌ی جداگانه برای «ایستگاه»
+  // وجود ندارد؛ اگر همین الان تیکتی برای آن ایستگاه در صف نباشد، تبی هم
+  // برایش نمایش داده نمی‌شود (به‌جز «همه» که همیشه هست).
+  const stationTabs = useMemo(() => {
+    const stations = new Set<string>();
+    for (const order of orders) {
+      for (const item of order.items) {
+        stations.add(item.station);
+      }
+    }
+    return Array.from(stations).sort((a, b) => a.localeCompare(b, 'fa'));
+  }, [orders]);
+
+  // اگر تب انتخاب‌شده دیگر در لیست فعلی نباشد (مثلاً آخرین تیکت آن ایستگاه
+  // جمع شد)، به‌صورت خودکار برمی‌گردیم به «همه» تا کاربر با یک تب خالیِ
+  // ناپدیدشده گیر نکند.
+  useEffect(() => {
+    if (activeStation !== ALL_STATIONS && !stationTabs.includes(activeStation)) {
+      setActiveStation(ALL_STATIONS);
+    }
+  }, [activeStation, stationTabs]);
+
+  // سفارش‌هایی که در ایستگاه انتخاب‌شده حداقل یک آیتم دارند، و در هر تیکت
+  // فقط همان آیتم‌های همین ایستگاه نمایش داده می‌شود. توجه: وضعیت سفارش
+  // (در انتظار/در حال آماده‌سازی/آماده) همچنان روی کل سفارش است، نه روی هر
+  // آیتم — پس دکمه‌ی «شروع پخت»/«آماده تحویل» حتی در نمای تک‌ایستگاهی، کل
+  // سفارش را جلو می‌برد، نه فقط آیتم‌های همان ایستگاه.
+  const visibleOrders = useMemo(() => {
+    if (activeStation === ALL_STATIONS) return orders;
+    return orders
+      .filter(o => o.items.some(i => i.station === activeStation))
+      .map(o => ({ ...o, items: o.items.filter(i => i.station === activeStation) }));
+  }, [orders, activeStation]);
 
   const moveOrder = async (orderId: string, newStatus: OrderStatus) => {
     // Keep a snapshot so we can roll back if the server update fails
@@ -101,7 +144,7 @@ export default function KitchenPage() {
   };
 
   const renderColumn = (status: OrderStatus, title: string, colorClass: string, bgHeaderClass: string) => {
-    const columnOrders = orders.filter(o => o.status === status).sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+    const columnOrders = visibleOrders.filter(o => o.status === status).sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
     return (
       <div className="flex flex-col bg-gray-900 rounded-xl overflow-hidden shadow-lg border border-gray-800">
@@ -140,6 +183,9 @@ export default function KitchenPage() {
                         <span className="font-bold text-xl text-blue-400 w-8 text-left">{toPersianDigits(item.quantity)}x</span>
                         <span className="text-gray-100 text-lg font-medium">{item.name}</span>
                       </div>
+                      {activeStation === ALL_STATIONS && (
+                        <span className="text-xs text-gray-500 bg-gray-900 border border-gray-700 rounded-full px-2 py-0.5 shrink-0">{item.station}</span>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -172,7 +218,7 @@ export default function KitchenPage() {
 
   return (
     <div className="fixed inset-0 top-16 bg-gray-950 p-6 z-10 overflow-hidden flex flex-col">
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex justify-between items-center mb-4">
         <h1 className="text-3xl font-bold text-white tracking-tight flex items-center gap-3">
           <span>سیستم مدیریت آشپزخانه (KDS)</span>
           {isLoading && orders.length > 0 && (
@@ -190,12 +236,42 @@ export default function KitchenPage() {
         </div>
       </div>
 
+      {/* Station tabs */}
+      <div className="flex items-center gap-2 mb-4 overflow-x-auto pb-1">
+        <button
+          onClick={() => setActiveStation(ALL_STATIONS)}
+          className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors border ${
+            activeStation === ALL_STATIONS
+              ? 'bg-blue-600 border-blue-500 text-white'
+              : 'bg-gray-900 border-gray-800 text-gray-300 hover:bg-gray-800'
+          }`}
+        >
+          همه ایستگاه‌ها
+        </button>
+        {stationTabs.map(station => (
+          <button
+            key={station}
+            onClick={() => setActiveStation(station)}
+            className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors border ${
+              activeStation === station
+                ? 'bg-blue-600 border-blue-500 text-white'
+                : 'bg-gray-900 border-gray-800 text-gray-300 hover:bg-gray-800'
+            }`}
+          >
+            {station}
+            <span className="mr-2 text-xs opacity-70">
+              ({toPersianDigits(orders.filter(o => o.items.some(i => i.station === station)).length)})
+            </span>
+          </button>
+        ))}
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1 h-full">
         {renderColumn('PENDING', 'در انتظار پخت', '#ef4444', 'bg-red-600')}
         {renderColumn('PREPARING', 'در حال آماده‌سازی', '#eab308', 'bg-yellow-600')}
         {renderColumn('READY', 'آماده تحویل', '#22c55e', 'bg-green-600')}
       </div>
-      
+
       {/* Quick custom scrollbar style injection for dark theme */}
       <style dangerouslySetInnerHTML={{__html: `
         .custom-scrollbar::-webkit-scrollbar {

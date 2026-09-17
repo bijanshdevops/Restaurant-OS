@@ -284,6 +284,33 @@ Covered end-to-end by `tests/accounting.test.ts`.
 
 ---
 
+## Kitchen Display System — Multi-Station Routing (Phase 8)
+
+A basic single-queue kitchen display (a 3-column PENDING → PREPARING → READY board with an elapsed-time-since-order warning) already existed from an earlier phase. Phase 8 adds multi-station routing on top of it, without changing that underlying board or its access model.
+
+### Data model
+
+- **`MenuItem.kitchenStation`**: an optional free-text label (e.g. «گریل», «سرد», «دسر») set per menu item by ADMIN. It is deliberately just a tag on the existing menu item — not a new managed "Station" entity/table. An item left without one falls back to a catch-all «عمومی» (general) station.
+
+### Station routing on the KDS
+
+- The kitchen page (`/dashboard/kitchen`) now shows a row of station tabs above the existing board: "همه ایستگاه‌ها" (all) plus one tab per station that currently has at least one active item — tabs are computed live from what's actually in the queue, not from a fixed configured list, so an unused station simply has no tab.
+- Selecting a station tab filters the board to tickets containing at least one item for that station, and within each ticket only that station's items are shown (all items are shown, with a small station badge per item, under "همه ایستگاه‌ها").
+- The existing elapsed-time warning (a ticket highlighted once it's been waiting too long) and the PENDING/PREPARING/READY flow are unchanged and apply the same way inside a filtered station view.
+
+### Known limitations (by design, for this phase)
+
+- **Order status is still per-order, not per-item.** A ticket's "شروع پخت"/"آماده تحویل" buttons always advance the *whole* order, even when a chef is looking at a single-station tab that only shows that station's items — there is no independent per-item ready state. Splitting an order's kitchen workflow per item would require a real per-item status column, which was out of scope for this pass.
+- **No configurable prep-time targets or formal SLAs.** As scoped, stations only add routing/filtering; the "late ticket" warning stays the same simple elapsed-time threshold that existed before this phase, not a per-item/per-station configurable target time.
+
+### Access & scope
+
+- Unchanged: the `/dashboard/kitchen` route was already restricted to `ADMIN` and `CHEF`, and the underlying `getActiveOrders`/`updateOrderStatus` actions remain also open to `CASHIER` as before (shared with other parts of the app). Editing a menu item's kitchen station is part of menu management and stays `ADMIN`-only.
+
+Covered end-to-end by `tests/kitchen.test.ts`.
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, review process, and branching model.

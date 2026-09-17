@@ -19,6 +19,7 @@ interface MenuItem {
   imageUrl: string | null;
   isAvailable: boolean;
   ingredients?: string | null;
+  kitchenStation?: string | null;
 }
 
 interface UserData {
@@ -403,7 +404,8 @@ export default function AdminPage() {
         subCategory: menuFormData.subCategory || '',
         imageUrl: menuFormData.imageUrl || '',
         isAvailable: menuFormData.isAvailable ?? true,
-        ingredients: menuFormData.ingredients || ''
+        ingredients: menuFormData.ingredients || '',
+        kitchenStation: menuFormData.kitchenStation || ''
       });
       if (res.success && res.item) {
         setItems(items.map(item => item.id === editingItem.id ? res.item as MenuItem : item));
@@ -416,7 +418,8 @@ export default function AdminPage() {
         subCategory: menuFormData.subCategory || '',
         imageUrl: menuFormData.imageUrl || '',
         isAvailable: menuFormData.isAvailable ?? true,
-        ingredients: menuFormData.ingredients || ''
+        ingredients: menuFormData.ingredients || '',
+        kitchenStation: menuFormData.kitchenStation || ''
       });
       if (res.success && res.item) {
         setItems([res.item as MenuItem, ...items]);
@@ -1423,7 +1426,18 @@ export default function AdminPage() {
                     placeholder="مثال: پیتزا و پاستا"
                   />
                 </div>
-                
+                <div className="col-span-2">
+                  <label className="block text-sm font-bold text-gray-700 mb-1">ایستگاه آشپزخانه (KDS)</label>
+                  <input
+                    type="text"
+                    value={menuFormData.kitchenStation || ''}
+                    onChange={e => setMenuFormData({...menuFormData, kitchenStation: e.target.value})}
+                    className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all font-sans"
+                    placeholder="مثال: گریل، سرد، دسر (اختیاری — خالی بماند یعنی «عمومی»)"
+                  />
+                  <p className="text-xs text-gray-400 mt-1">تعیین می‌کند این آیتم روی تابلوی آشپزخانه (KDS) زیر کدام ایستگاه نمایش داده شود.</p>
+                </div>
+
                 <div className="col-span-2 flex items-center gap-3 bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 mt-2">
                   <input
                     type="checkbox"

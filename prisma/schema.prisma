@@ -60,6 +60,13 @@ model MenuItem {
   updatedAt   DateTime     @default(now()) @updatedAt
   orderItems  OrderItem[]
   recipeItems RecipeItem[]
+
+  // --- Phase 8: kitchen display system (KDS) ---
+  // ایستگاه آشپزخانه‌ای که این آیتم باید در آن آماده شود (مثلاً «گریل»،
+  // «سرد»، «دسر»)؛ یک برچسب متنی آزاد است، نه یک موجودیت مدیریت‌شده‌ی جدا.
+  // آیتم بدون این مقدار روی تابلوی آشپزخانه زیر ایستگاه عمومی («عمومی») قرار
+  // می‌گیرد.
+  kitchenStation String?
 }
 
 model Order {

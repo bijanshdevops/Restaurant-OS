@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { loginUser, logoutUser, createUser, updateUserHourlyRate, updateUserBranch } from '@/app/actions/user';
 import { getBranches, createBranch, updateBranch, setBranchActive, setDefaultBranch } from '@/app/actions/branch';
-import { getMenuItems, createMenuItem, getPublicMenuItems } from '@/app/actions/menu';
+import { getMenuItems, createMenuItem, updateMenuItem, getPublicMenuItems } from '@/app/actions/menu';
 import {
   createOrder,
   getActiveOrders,
@@ -113,6 +113,7 @@ const actions: Record<string, (...args: any[]) => Promise<any>> = {
   setDefaultBranch,
   getMenuItems,
   createMenuItem,
+  updateMenuItem,
   createOrder,
   getActiveOrders,
   updateOrderStatus,

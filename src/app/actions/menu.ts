@@ -52,6 +52,7 @@ export async function createMenuItem(data: {
   imageUrl: string;
   isAvailable?: boolean;
   ingredients?: string;
+  kitchenStation?: string;
 }) {
   const auth = await requireRole('ADMIN');
   if (!auth.ok) return { success: false, error: auth.error };
@@ -66,6 +67,7 @@ export async function createMenuItem(data: {
         imageUrl: data.imageUrl || null,
         isAvailable: data.isAvailable ?? true,
         ingredients: data.ingredients || null,
+        kitchenStation: data.kitchenStation?.trim() || null,
       },
     });
     return { success: true, item: newItem };
@@ -83,6 +85,7 @@ export async function updateMenuItem(id: string, data: {
   imageUrl: string;
   isAvailable?: boolean;
   ingredients?: string;
+  kitchenStation?: string;
 }) {
   const auth = await requireRole('ADMIN');
   if (!auth.ok) return { success: false, error: auth.error };
@@ -98,6 +101,7 @@ export async function updateMenuItem(id: string, data: {
         imageUrl: data.imageUrl || null,
         isAvailable: data.isAvailable ?? true,
         ingredients: data.ingredients || null,
+        kitchenStation: data.kitchenStation?.trim() || null,
       },
     });
     return { success: true, item: updatedItem };

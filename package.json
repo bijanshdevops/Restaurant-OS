@@ -4,6 +4,7 @@
   "description": "Enterprise Restaurant Operating System",
   "scripts": {
     "dev": "next dev",
+    "dev:winfix": "next build && next start",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

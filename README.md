@@ -311,6 +311,38 @@ Covered end-to-end by `tests/kitchen.test.ts`.
 
 ---
 
+## Sales Analytics / BI Dashboard (Phase 9)
+
+A reporting dashboard (`/dashboard/analytics`) that turns the order history already collected by the app (POS + online, across branches) into sales KPIs, trends and comparisons — no new data-entry surface, purely derived reporting.
+
+### What counts as a sale
+
+- **"Real sales" definition (fixed, not user-configurable):** an order counts if its status is anything other than `CANCELLED` or `AWAITING_PAYMENT`. This deliberately mirrors the exact moment the accounting module (Phase 7) books income — POS orders synchronously at `PENDING`, online orders only once payment is confirmed — so the two modules never disagree about what a "sale" is.
+- **Default reporting window:** if no date range is chosen, the dashboard shows the last 30 days (inclusive of today). Date range and branch are the only user-facing filters; the sale-status definition above is not.
+
+### Reports included
+
+- **KPI cards**: total revenue, total order count, average order value for the selected period/branch.
+- **Daily revenue trend**: revenue and order count per day across the selected range.
+- **Best/worst-selling menu items**: top 10 by revenue and bottom 10 by quantity sold, computed only among items that had at least one sale in the period.
+- **Branch comparison**: revenue and order count per branch (ADMIN sees every branch side-by-side; a branch-scoped role only ever sees its own branch's row, plus branch-less online orders — see below).
+- **Peak hours**: order count/revenue for each of the 24 hours of the day.
+- **Sales channel mix**: order count/revenue split by `DINE_IN` / `TAKEAWAY` / `ONLINE_DELIVERY`.
+
+### Branch scoping
+
+Reuses the exact multi-branch pattern from Phases 5/7: `ADMIN` sees and can filter across every branch; `ACCOUNTANT` (the other role with access) is always scoped to their own branch, regardless of any `branchId` sent from the client. As in the accounting module, branch-less online orders (`branchId = null` — online ordering doesn't have a branch picker yet, a known limitation carried over from Phase 5) are visible under **any** branch filter, including a non-admin's own-branch view — they simply don't have a "real" branch to attribute to yet.
+
+### Known limitations (by design, for this phase)
+
+- **"Worst-selling" is not "never sold."** The bottom-10 list only ranks items that sold at least once in the period; comparing against the full menu to find items with *zero* sales was out of scope for this pass.
+- **No export.** Unlike the accounting module's Excel export, this dashboard has no export feature in this pass.
+- **No forecasting/cohort/staff-performance analytics.** This phase is limited to descriptive sales/menu/branch reporting — no predictive or customer-cohort analysis.
+
+Covered end-to-end by `tests/analytics.test.ts`.
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, review process, and branching model.

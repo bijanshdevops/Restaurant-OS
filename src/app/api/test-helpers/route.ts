@@ -88,6 +88,7 @@ import {
   runPayroll,
   getPayrollHistory,
 } from '@/app/actions/staffSchedule';
+import { getSalesAnalytics } from '@/app/actions/analytics';
 
 /**
  * دروازه‌ی کمکی مخصوص تست‌های خودکار (Vitest / CI).
@@ -208,6 +209,7 @@ const actions: Record<string, (...args: any[]) => Promise<any>> = {
   getPayrollPreview,
   runPayroll,
   getPayrollHistory,
+  getSalesAnalytics,
 };
 
 function guard() {

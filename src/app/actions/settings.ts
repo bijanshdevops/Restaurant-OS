@@ -1,7 +1,9 @@
 "use server";
 
 import { prisma } from '@/lib/prisma';
+import { AuditAction } from '@prisma/client';
 import { requireRole } from '@/lib/auth';
+import { logAudit, actorFieldsFromUser } from '@/lib/auditLog';
 
 const SETTINGS_ID = 'default';
 
@@ -78,6 +80,15 @@ export async function updateSettings(data: {
       create: { id: SETTINGS_ID, ...data },
       update: data,
     });
+
+    await logAudit({
+      ...actorFieldsFromUser(auth.user),
+      action: AuditAction.SETTINGS_UPDATED,
+      entityType: 'RestaurantSettings',
+      entityId: SETTINGS_ID,
+      metadata: { ...data },
+    });
+
     return { success: true, settings };
   } catch (error) {
     console.error('Error updating settings:', error);
@@ -123,6 +134,24 @@ export async function updateModianSettings(data: {
     });
     // کلید API را در پاسخ برنمی‌گردانیم تا در کلاینت نمایش داده نشود
     const { tspApiKey, ...safeSettings } = settings;
+
+    // متن خودِ کلید API هرگز در لاگ ذخیره نمی‌شود — فقط اینکه آیا در همین
+    // درخواست تغییر کرده یا نه.
+    await logAudit({
+      ...actorFieldsFromUser(auth.user),
+      action: AuditAction.SETTINGS_UPDATED,
+      entityType: 'ModianSettings',
+      entityId: SETTINGS_ID,
+      metadata: {
+        modianEnabled: data.modianEnabled,
+        economicCode: data.economicCode,
+        nationalId: data.nationalId,
+        tspProviderName: data.tspProviderName,
+        tspApiBaseUrl: data.tspApiBaseUrl,
+        apiKeyChanged: !!data.tspApiKey,
+      },
+    });
+
     return { success: true, settings: { ...safeSettings, hasApiKey: !!tspApiKey } };
   } catch (error) {
     console.error('Error updating modian settings:', error);

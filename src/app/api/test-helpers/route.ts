@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { loginUser, logoutUser, createUser, updateUserHourlyRate, updateUserBranch } from '@/app/actions/user';
+import { loginUser, logoutUser, createUser, deleteUser, updateUserHourlyRate, updateUserBranch } from '@/app/actions/user';
 import { getBranches, createBranch, updateBranch, setBranchActive, setDefaultBranch } from '@/app/actions/branch';
 import { getMenuItems, createMenuItem, updateMenuItem, getPublicMenuItems } from '@/app/actions/menu';
 import {
@@ -90,6 +90,7 @@ import {
 } from '@/app/actions/staffSchedule';
 import { getSalesAnalytics } from '@/app/actions/analytics';
 import { findOrderForRefund, createRefund, getRefunds } from '@/app/actions/refund';
+import { getAuditLogs, getAuditActionList } from '@/app/actions/auditLog';
 
 /**
  * دروازه‌ی کمکی مخصوص تست‌های خودکار (Vitest / CI).
@@ -106,6 +107,7 @@ const actions: Record<string, (...args: any[]) => Promise<any>> = {
   login: loginUser,
   logout: logoutUser,
   createUser,
+  deleteUser,
   getUsers,
   updateUserBranch,
   getBranches,
@@ -214,6 +216,8 @@ const actions: Record<string, (...args: any[]) => Promise<any>> = {
   findOrderForRefund,
   createRefund,
   getRefunds,
+  getAuditLogs,
+  getAuditActionList,
 };
 
 function guard() {

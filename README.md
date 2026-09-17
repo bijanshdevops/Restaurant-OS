@@ -375,6 +375,37 @@ Covered end-to-end by `tests/refund.test.ts`.
 
 ---
 
+## Audit Log (Phase 11)
+
+An `ADMIN`-only activity log (`/dashboard/audit-log`) that records **sensitive events only** — deliberately not a full request/read audit trail, and not a change-log for every write in the system.
+
+### What is logged (and what deliberately isn't)
+
+Only these events write an `AuditLog` row: user login (both success and failure), user creation and deletion, financial-transaction deletion and recategorization/edit, refund creation, restaurant-settings and Modian (tax-authority) settings updates, and running payroll. Everything else — every read/list action, every normal POS/online order, menu/inventory/reservation/CRM changes, and so on — is intentionally never logged, per the explicit "sensitive events only" scope decision for this phase. This keeps the log small and genuinely worth reading, at the cost of not being a complete forensic trail of the system.
+
+**Role changes are not a logged event because no such action exists in this codebase.** A user's roles are set once, at `createUser` time (`roles: Role[]`), and there is no `updateUserRoles`/`updateRoles` action anywhere to change them afterward — this was confirmed by re-reading `src/app/actions/user.ts` while scoping this phase. If that capability is added in a future phase, it should log a `ROLE_CHANGED`-style event alongside it.
+
+### How it's recorded
+
+- A single `logAudit()` helper (`src/lib/auditLog.ts`) is the only place that writes to the `AuditLog` table. It never throws — any failure writing the log row (e.g. a transient DB hiccup) is swallowed and only printed to the server console, so a logging problem can never break the real operation (deleting a transaction, running payroll, etc.) it's attached to.
+- Call sites inside an existing `prisma.$transaction` (payroll runs, refund creation) pass that transaction's client into `logAudit()`, so the log row commits or rolls back atomically with the business operation it describes — a payroll run that fails partway through never leaves behind a log entry for a payment that was never actually made.
+- A failed login is logged with `actorUserId = null` (or the real user's id, if the username matched but the password didn't) and `actorName` set to the attempted username — the password itself is never logged, anywhere.
+- Deleting a user never fails or is blocked because of that user's own audit history: the `AuditLog.actorUserId` foreign key uses `onDelete: SetNull`.
+
+### Access
+
+`/dashboard/audit-log` and the underlying `getAuditLogs`/`getAuditActionList` actions are `ADMIN`-only (the recommended, simplest option) — there is no per-branch scoping here, since audit visibility isn't tied to the multi-branch model.
+
+### Known limitations (by design, for this phase)
+
+- **No export and no retention/archival policy.** Log rows accumulate indefinitely; pruning old entries was out of scope for this pass.
+- **No IP address capture.** This is a Next.js Server Actions app without a straightforward, framework-native way to read the caller's IP from inside a Server Action; `AuditLog.ipAddress` was left out of the schema entirely rather than shipping an always-empty column.
+- **Not a full audit trail.** As covered above, this is a fixed, curated list of sensitive events — not a generic "log every mutation" system.
+
+Covered end-to-end by `tests/auditLog.test.ts`.
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, review process, and branching model.

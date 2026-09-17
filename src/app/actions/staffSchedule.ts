@@ -1,8 +1,10 @@
 "use server";
 
 import { prisma } from '@/lib/prisma';
+import { AuditAction } from '@prisma/client';
 import { requireRole, resolveBranchFilter, resolveBranchForCreate } from '@/lib/auth';
 import { SYSTEM_CATEGORY_IDS } from '@/lib/accountingCategories';
+import { logAudit, actorFieldsFromUser } from '@/lib/auditLog';
 
 // مدیریت شیفت‌ها، تخصیص پرسنل، بازبینی درخواست‌ها و اجرای حقوق‌دهی فقط
 // در اختیار مدیر سیستم است. اقدامات خودخدمت (مشاهده شیفت‌های خودم، ثبت
@@ -615,6 +617,17 @@ export async function runPayroll(userId: string, periodStart: string, periodEnd:
           createdByUserId: auth.user.id,
         },
       });
+
+      await logAudit(
+        {
+          ...actorFieldsFromUser(auth.user),
+          action: AuditAction.PAYROLL_RUN,
+          entityType: 'PayrollPayment',
+          entityId: created.id,
+          metadata: { targetUserId: userId, targetUserName: user.name, totalHours, totalAmount, periodStart, periodEnd },
+        },
+        tx
+      );
 
       return created;
     });

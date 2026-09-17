@@ -1,10 +1,11 @@
 "use server";
 
 import { prisma } from '@/lib/prisma';
-import { Role } from '@prisma/client';
+import { Role, AuditAction } from '@prisma/client';
 import { PasswordHasher } from '@/shared/infrastructure/security/PasswordHasher';
 import { createSession, destroySession, requireRole, resolveBranchFilter } from '@/lib/auth';
 import { getDefaultBranchId } from './branch';
+import { logAudit, actorFieldsFromUser } from '@/lib/auditLog';
 
 /** Auto-seeds an admin (useful for fresh installs), assigned to the default branch. */
 async function seedAdminIfNeeded() {
@@ -93,6 +94,15 @@ export async function createUser(data: {
     
     // Don't return password
     const { password, ...safeUser } = newUser;
+
+    await logAudit({
+      ...actorFieldsFromUser(auth.user),
+      action: AuditAction.USER_CREATED,
+      entityType: 'User',
+      entityId: newUser.id,
+      metadata: { name: newUser.name, username: newUser.username, roles: newUser.roles, branchId: newUser.branchId },
+    });
+
     return { success: true, user: safeUser };
   } catch (error) {
     console.error('Error creating user:', error);
@@ -153,6 +163,15 @@ export async function deleteUser(id: string) {
     }
 
     await prisma.user.delete({ where: { id } });
+
+    await logAudit({
+      ...actorFieldsFromUser(auth.user),
+      action: AuditAction.USER_DELETED,
+      entityType: 'User',
+      entityId: id,
+      metadata: { name: userToDelete?.name, username: userToDelete?.username, roles: userToDelete?.roles },
+    });
+
     return { success: true };
   } catch (error) {
     console.error('Error deleting user:', error);
@@ -170,6 +189,15 @@ export async function loginUser(username: string, password: string) {
     });
 
     if (!user || !(await PasswordHasher.compare(password, user.password))) {
+      await logAudit({
+        actorUserId: user?.id ?? null,
+        actorName: username,
+        actorRole: null,
+        action: AuditAction.LOGIN_FAILURE,
+        entityType: 'User',
+        entityId: user?.id,
+        success: false,
+      });
       return { success: false, error: 'نام کاربری یا رمز عبور اشتباه است' };
     }
 
@@ -185,6 +213,15 @@ export async function loginUser(username: string, password: string) {
       roles: safeUser.roles,
       branchId: safeUser.branchId,
       branchName: branch?.name || '',
+    });
+
+    await logAudit({
+      actorUserId: safeUser.id,
+      actorName: safeUser.name,
+      actorRole: safeUser.roles?.[0] ?? null,
+      action: AuditAction.LOGIN_SUCCESS,
+      entityType: 'User',
+      entityId: safeUser.id,
     });
 
     return { success: true, user: { ...safeUser, branchName: branch?.name || '' } };

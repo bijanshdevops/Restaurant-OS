@@ -40,6 +40,9 @@ model User {
 
   // --- Phase 10: refunds & returns ---
   createdRefunds Refund[] @relation("RefundCreatedBy")
+
+  // --- Phase 11: audit log ---
+  auditLogs AuditLog[]
 }
 
 enum Role {
@@ -892,4 +895,53 @@ model RefundItem {
 
   @@index([refundId])
   @@index([orderItemId])
+}
+
+// =====================================================================
+// Phase 11: Audit Log (رویدادهای حساس)
+// =====================================================================
+
+// لاگ عملیات و ممیزی — طبق تصمیم صریح کاربر، فقط رویدادهای «حساس» ثبت
+// می‌شوند: حذف/ویرایش تراکنش مالی، ثبت مرجوعی، تغییر تنظیمات رستوران/سامانه
+// مودیان، ایجاد/حذف کاربر، اجرای حقوق‌دهی، و ورود موفق/ناموفق. سفارش‌های
+// عادی POS و عملیات صرفاً خواندنی (لیست‌ها، گزارش‌ها) هرگز اینجا ثبت
+// نمی‌شوند — نک. README برای فهرست کامل و دلیل این محدودیت. تغییر نقش
+// کاربر (role change) به‌عنوان رویداد جداگانه ثبت نمی‌شود چون چنین
+// اکشنی اصلاً در این کدبیس وجود ندارد (نقش فقط هنگام ایجاد کاربر تعیین
+// می‌شود).
+//
+// actorUserId هنگام ورود ناموفق (نام کاربری نامعتبر/رمز اشتباه) یا پس از
+// حذف بعدیِ کاربرِ ثبت‌کننده، null می‌شود (onDelete: SetNull — حذف یک
+// کاربر هرگز نباید با تاریخچه‌ی لاگ او مسدود شود)؛ actorName همیشه پر
+// است (برای ورود ناموفق، همان نام کاربریِ تلاش‌شده — هرگز رمز عبور).
+model AuditLog {
+  id          String      @id @default(uuid())
+  actorUserId String?
+  actorName   String
+  actorRole   String?
+  action      AuditAction
+  entityType  String?
+  entityId    String?
+  metadata    Json?
+  success     Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+
+  actorUser User? @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([actorUserId])
+  @@index([entityType, entityId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+enum AuditAction {
+  LOGIN_SUCCESS
+  LOGIN_FAILURE
+  USER_CREATED
+  USER_DELETED
+  TRANSACTION_DELETED
+  TRANSACTION_UPDATED
+  REFUND_CREATED
+  SETTINGS_UPDATED
+  PAYROLL_RUN
 }

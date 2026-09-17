@@ -1,9 +1,10 @@
 "use server";
 
 import { prisma } from '@/lib/prisma';
-import { Prisma, TransactionType, TransactionCategoryType } from '@prisma/client';
+import { Prisma, TransactionType, TransactionCategoryType, AuditAction } from '@prisma/client';
 import { requireRole, resolveBranchFilter, resolveBranchForCreate, isBranchExempt, SessionUser } from '@/lib/auth';
 import { SYSTEM_CATEGORY_IDS } from '@/lib/accountingCategories';
+import { logAudit, actorFieldsFromUser } from '@/lib/auditLog';
 import * as XLSX from 'xlsx';
 
 /**
@@ -211,6 +212,15 @@ export async function updateTransactionCategory(
       data: updateData,
       include: { category: true, branch: { select: { id: true, name: true } } },
     });
+
+    await logAudit({
+      ...actorFieldsFromUser(auth.user),
+      action: AuditAction.TRANSACTION_UPDATED,
+      entityType: 'Transaction',
+      entityId: id,
+      metadata: { changes: data },
+    });
+
     return { success: true, transaction: updated };
   } catch (error) {
     console.error('Error updating transaction:', error);
@@ -232,6 +242,15 @@ export async function deleteTransaction(id: string) {
       };
     }
     await prisma.transaction.delete({ where: { id } });
+
+    await logAudit({
+      ...actorFieldsFromUser(auth.user),
+      action: AuditAction.TRANSACTION_DELETED,
+      entityType: 'Transaction',
+      entityId: id,
+      metadata: { description: existing.description, amount: existing.amount, type: existing.type, categoryId: existing.categoryId },
+    });
+
     return { success: true };
   } catch (error) {
     console.error('Error deleting transaction:', error);

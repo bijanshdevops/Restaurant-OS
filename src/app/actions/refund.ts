@@ -1,10 +1,12 @@
 "use server";
 
 import { prisma } from '@/lib/prisma';
+import { AuditAction } from '@prisma/client';
 import { requireRole } from '@/lib/auth';
 import { reverseLoyaltyForRefund } from '@/lib/loyalty';
 import { getDefaultBranchId } from './branch';
 import { SYSTEM_CATEGORY_IDS } from '@/lib/accountingCategories';
+import { logAudit, actorFieldsFromUser } from '@/lib/auditLog';
 
 /**
  * Phase 10: مرجوعی و استرداد سفارش.
@@ -242,6 +244,23 @@ export async function createRefund(input: CreateRefundInput) {
           decrementOrderCount: input.isFullRefund,
         });
       }
+
+      await logAudit(
+        {
+          ...actorFieldsFromUser(auth.user),
+          action: AuditAction.REFUND_CREATED,
+          entityType: 'Refund',
+          entityId: createdRefund.id,
+          metadata: {
+            orderId: order.id,
+            orderNumber: order.orderNumber,
+            isFullRefund: input.isFullRefund,
+            totalAmount: refundTotalAmount,
+            reason,
+          },
+        },
+        tx
+      );
 
       return createdRefund;
     });

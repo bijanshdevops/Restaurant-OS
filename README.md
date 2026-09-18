@@ -584,6 +584,37 @@ Covered end-to-end by `tests/thirdPartyDelivery.test.ts` (automatic dispatch on 
 
 ---
 
+## Cash Flow & Bank/Cash Reconciliation (Phase 18)
+
+A new `FinancialAccount` concept (cash till / bank / payment gateway) sits on top of the existing single-entry `Transaction` ledger from Phase 7, letting a transaction be attributed to *which* account the money actually moved through — something the ledger had no way to express before this phase. Per the user's confirmed scope, this phase deliberately does not rebuild anything Phase 7's accounting module or the separate Modian e-invoicing module already cover (categorized P&L, VAT reporting, tax-document submission); it targets the one real gap that codebase research surfaced before scoping began: no concept of a cash till or bank account, and no way to catch a mismatch between the books and what's physically in the till or bank.
+
+### Three system accounts, seeded like Phase 7's categories
+
+Three protected accounts — «صندوق نقد» (cash), «بانک» (bank), «درگاه پرداخت آنلاین» (online gateway) — are seeded with fixed IDs directly in the Phase 18 migration, mirroring exactly how Phase 7 seeded its six system `TransactionCategory` rows. `ADMIN`/`ACCOUNTANT` can additionally create any number of custom `FinancialAccount`s (e.g. a second bank account), per the user's confirmed "seed defaults + allow custom" scope answer.
+
+### Automatic account-linking: a POS cash/card toggle, online/QR always to the gateway
+
+Before this phase, POS checkout (`createOrder`) never recorded how a sale was paid — cash and card were indistinguishable in the ledger. A new نقد/کارت toggle was added to the POS checkout screen, and `createOrder` gained an optional, backward-compatible `paymentMethod` parameter that links the order's automatic income `Transaction` to the cash or bank system account accordingly (defaulting to cash if omitted, so no existing caller breaks). Online and QR-table orders always settle through ZarinPal, so `finalizeOnlineOrderAfterPayment` links their income transaction to the gateway account unconditionally — there was no ambiguity to resolve there, per the user's confirmed scope.
+
+### Transfers: deliberately kept outside the `Transaction` ledger
+
+A new `AccountTransfer` model records moving money between two accounts (e.g. depositing till cash into the bank). This was **not** one of the three scoping questions asked — it is my own architectural addition, made because a "cash flow" feature without any way to move money between the accounts it tracks would be incomplete. It is structurally kept separate from `Transaction` specifically so a transfer can never be mistaken for income or expense and never distorts Phase 7's P&L or VAT figures, which read only from `Transaction`.
+
+### Reconciliation: record and display the variance, never auto-correct
+
+`createAccountReconciliation` lets staff enter what they actually counted in the till/bank against the balance the ledger computes (`computeAccountBalances`, summing income/expense/transfers per account), storing the `difference`. Per the user's confirmed scope, this is intentionally the end of the workflow — no adjusting `Transaction` is ever created to "zero out" the variance; a human decides what to do about a mismatch, the system only surfaces it.
+
+### Known scope decisions (disclosed)
+
+- **Automatic account-linking is limited to POS (cash/card) and online/QR (gateway).** Purchase-order receipts and payroll runs — both of which already post automatic transactions since Phase 7 — keep posting with no `accountId` ("unclassified") by default; they're assignable after the fact via the extended `updateTransactionCategory`, but nothing auto-assigns them in this phase.
+- **Accounts are global, not per-branch.** There is no per-branch cash-till concept in this pass — every branch's POS cash sales post to the same single "صندوق نقد" account.
+- **The new cash-flow UI is a separate page** (`/dashboard/accounting/cash-flow`), not merged into the existing 664-line accounting page, to avoid destabilizing Phase 7's reporting screen.
+- **No automatic adjusting transaction on reconciliation variance** — enforced in code, not just by omission, per the user's confirmed scope.
+
+Covered end-to-end by `tests/cashFlowAccounts.test.ts` (system-account seeding, POS cash/card auto-linking via before/after balance deltas, online/QR gateway auto-linking, custom account creation and transfers, transfer validation, reconciliation correctly recording a variance with no auto-adjustment, manual account (re)assignment via `updateTransactionCategory`, and `CHEF` access-denial across every new action).
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, review process, and branching model.

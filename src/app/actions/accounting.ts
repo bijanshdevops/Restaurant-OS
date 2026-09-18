@@ -88,10 +88,19 @@ export async function getTransactions(filters: TransactionFilters = {}) {
   }
 }
 
+/** فاز ۱۸: اگر accountId داده شده، وجود و فعال‌بودنِ آن را بررسی می‌کند. */
+async function resolveOptionalAccountId(accountId?: string | null): Promise<{ ok: true; accountId: string | null } | { ok: false; error: string }> {
+  if (!accountId) return { ok: true, accountId: null };
+  const account = await prisma.financialAccount.findUnique({ where: { id: accountId } });
+  if (!account) return { ok: false, error: 'حساب انتخاب‌شده یافت نشد' };
+  if (!account.isActive) return { ok: false, error: 'این حساب غیرفعال است' };
+  return { ok: true, accountId };
+}
+
 export async function createExpense(
   description: string,
   amount: number,
-  options: { branchId?: string; categoryId?: string; taxAmount?: number } = {}
+  options: { branchId?: string; categoryId?: string; taxAmount?: number; accountId?: string } = {}
 ) {
   const auth = await requireRole('ADMIN', 'ACCOUNTANT');
   if (!auth.ok) return { success: false, error: auth.error };
@@ -106,6 +115,8 @@ export async function createExpense(
     if (!category || category.type !== 'EXPENSE') {
       return { success: false, error: 'دسته‌بندی انتخاب‌شده برای هزینه معتبر نیست' };
     }
+    const accountResolved = await resolveOptionalAccountId(options.accountId);
+    if (!accountResolved.ok) return { success: false, error: accountResolved.error };
     const taxAmount = computeTaxAmount(amount, options.taxAmount, category.taxRatePercent);
 
     const expense = await prisma.transaction.create({
@@ -116,9 +127,10 @@ export async function createExpense(
         taxAmount,
         branchId: effectiveBranchId,
         categoryId,
+        accountId: accountResolved.accountId,
         createdByUserId: auth.user.id,
       },
-      include: { category: true, branch: { select: { id: true, name: true } } },
+      include: { category: true, branch: { select: { id: true, name: true } }, account: true },
     });
 
     return { success: true, transaction: expense };
@@ -131,7 +143,7 @@ export async function createExpense(
 export async function createIncome(
   description: string,
   amount: number,
-  options: { branchId?: string; categoryId?: string; taxAmount?: number } = {}
+  options: { branchId?: string; categoryId?: string; taxAmount?: number; accountId?: string } = {}
 ) {
   const auth = await requireRole('ADMIN', 'ACCOUNTANT');
   if (!auth.ok) return { success: false, error: auth.error };
@@ -146,6 +158,8 @@ export async function createIncome(
     if (!category || category.type !== 'INCOME') {
       return { success: false, error: 'دسته‌بندی انتخاب‌شده برای درآمد معتبر نیست' };
     }
+    const accountResolved = await resolveOptionalAccountId(options.accountId);
+    if (!accountResolved.ok) return { success: false, error: accountResolved.error };
     const taxAmount = computeTaxAmount(amount, options.taxAmount, category.taxRatePercent);
 
     const income = await prisma.transaction.create({
@@ -156,9 +170,10 @@ export async function createIncome(
         taxAmount,
         branchId: effectiveBranchId,
         categoryId,
+        accountId: accountResolved.accountId,
         createdByUserId: auth.user.id,
       },
-      include: { category: true, branch: { select: { id: true, name: true } } },
+      include: { category: true, branch: { select: { id: true, name: true } }, account: true },
     });
 
     return { success: true, transaction: income };
@@ -170,7 +185,7 @@ export async function createIncome(
 
 export async function updateTransactionCategory(
   id: string,
-  data: { categoryId?: string | null; description?: string; taxAmount?: number }
+  data: { categoryId?: string | null; description?: string; taxAmount?: number; accountId?: string | null }
 ) {
   const auth = await requireRole('ADMIN', 'ACCOUNTANT');
   if (!auth.ok) return { success: false, error: auth.error };
@@ -206,11 +221,21 @@ export async function updateTransactionCategory(
       }
       updateData.taxAmount = data.taxAmount;
     }
+    // فاز ۱۸: امکان تخصیص/تغییرِ حسابِ جریان نقدیِ این تراکنش — از جمله
+    // تراکنش‌های خودکاری (خرید از تأمین‌کننده، حقوق) که در لحظه‌ی صدور
+    // هنوز حسابی ندارند.
+    if (data.accountId !== undefined) {
+      const accountResolved = await resolveOptionalAccountId(data.accountId);
+      if (!accountResolved.ok) return { success: false, error: accountResolved.error };
+      updateData.account = accountResolved.accountId
+        ? { connect: { id: accountResolved.accountId } }
+        : { disconnect: true };
+    }
 
     const updated = await prisma.transaction.update({
       where: { id },
       data: updateData,
-      include: { category: true, branch: { select: { id: true, name: true } } },
+      include: { category: true, branch: { select: { id: true, name: true } }, account: true },
     });
 
     await logAudit({
@@ -509,5 +534,273 @@ export async function exportTransactionsToExcel(filters: TransactionFilters = {}
   } catch (error) {
     console.error('Error exporting transactions to Excel:', error);
     return { success: false, error: 'Failed to export transactions' };
+  }
+}
+
+/**
+ * فاز ۱۸: جریان نقدی و مغایرت‌گیری صندوق/بانک.
+ *
+ * سه حساب سیستمی (صندوق نقد/بانک/درگاه پرداخت آنلاین) در migration این
+ * فاز از پیش ساخته شده‌اند (نک. src/lib/accountingCategories.ts،
+ * SYSTEM_ACCOUNT_IDS). موجودیِ هیچ حسابی ذخیره نمی‌شود — همیشه زنده از
+ * روی مجموعِ تراکنش‌های INCOME/EXPENSE متصل به آن به‌علاوه‌ی انتقال‌های
+ * بین‌حسابیِ ورودی/خروجی محاسبه می‌شود (نک. computeAccountBalance).
+ */
+
+export async function getAccounts() {
+  const auth = await requireRole('ADMIN', 'ACCOUNTANT');
+  if (!auth.ok) return { success: false, error: auth.error };
+
+  try {
+    const accounts = await prisma.financialAccount.findMany({
+      orderBy: [{ isSystem: 'desc' }, { type: 'asc' }, { name: 'asc' }],
+    });
+    return { success: true, accounts };
+  } catch (error) {
+    console.error('Error fetching accounts:', error);
+    return { success: false, error: 'Failed to fetch accounts' };
+  }
+}
+
+export async function createAccount(name: string, type: 'CASH' | 'BANK' | 'GATEWAY' | 'OTHER') {
+  const auth = await requireRole('ADMIN', 'ACCOUNTANT');
+  if (!auth.ok) return { success: false, error: auth.error };
+
+  if (!name?.trim()) return { success: false, error: 'نام حساب الزامی است' };
+  if (!['CASH', 'BANK', 'GATEWAY', 'OTHER'].includes(type)) {
+    return { success: false, error: 'نوع حساب نامعتبر است' };
+  }
+
+  try {
+    const account = await prisma.financialAccount.create({
+      data: { name: name.trim(), type, isSystem: false },
+    });
+    return { success: true, account };
+  } catch (error: any) {
+    if (error?.code === 'P2002') {
+      return { success: false, error: 'حسابی با این نام قبلاً ثبت شده است' };
+    }
+    console.error('Error creating account:', error);
+    return { success: false, error: 'Failed to create account' };
+  }
+}
+
+export async function updateAccount(id: string, data: { name?: string; isActive?: boolean }) {
+  const auth = await requireRole('ADMIN', 'ACCOUNTANT');
+  if (!auth.ok) return { success: false, error: auth.error };
+
+  try {
+    const updateData: Prisma.FinancialAccountUpdateInput = {};
+    if (data.name !== undefined) {
+      if (!data.name.trim()) return { success: false, error: 'نام نمی‌تواند خالی باشد' };
+      updateData.name = data.name.trim();
+    }
+    if (data.isActive !== undefined) updateData.isActive = data.isActive;
+
+    const account = await prisma.financialAccount.update({ where: { id }, data: updateData });
+    return { success: true, account };
+  } catch (error: any) {
+    if (error?.code === 'P2002') return { success: false, error: 'حسابی با این نام قبلاً ثبت شده است' };
+    if (error?.code === 'P2025') return { success: false, error: 'حساب یافت نشد' };
+    console.error('Error updating account:', error);
+    return { success: false, error: 'Failed to update account' };
+  }
+}
+
+/**
+ * موجودیِ زنده‌ی هر حساب = (درآمدهای متصل) − (هزینه‌های متصل) +
+ * (انتقال‌های ورودی) − (انتقال‌های خروجی). چون Transaction/AccountTransfer
+ * هیچ‌کدام هرگز حذف نمی‌شوند (نک. Phase 7/10)، این مقدار همیشه از صفر تا
+ * الان محاسبه می‌شود — نه فقط از آخرین مغایرت‌گیری به بعد.
+ */
+async function computeAccountBalances(branchId?: string) {
+  const branchWhere = branchId ? { OR: [{ branchId }, { branchId: null }] } : {};
+
+  const byTypeAndAccount = await prisma.transaction.groupBy({
+    by: ['accountId', 'type'],
+    _sum: { amount: true },
+    where: branchWhere,
+  });
+  const transfersOut = await prisma.accountTransfer.groupBy({
+    by: ['fromAccountId'],
+    _sum: { amount: true },
+  });
+  const transfersIn = await prisma.accountTransfer.groupBy({
+    by: ['toAccountId'],
+    _sum: { amount: true },
+  });
+
+  const balances = new Map<string | null, { income: number; expense: number; transfersIn: number; transfersOut: number }>();
+  const ensure = (key: string | null) => {
+    if (!balances.has(key)) balances.set(key, { income: 0, expense: 0, transfersIn: 0, transfersOut: 0 });
+    return balances.get(key)!;
+  };
+  for (const row of byTypeAndAccount) {
+    const bucket = ensure(row.accountId);
+    if (row.type === 'INCOME') bucket.income += row._sum.amount ?? 0;
+    else bucket.expense += row._sum.amount ?? 0;
+  }
+  for (const row of transfersOut) ensure(row.fromAccountId).transfersOut += row._sum.amount ?? 0;
+  for (const row of transfersIn) ensure(row.toAccountId).transfersIn += row._sum.amount ?? 0;
+
+  return balances;
+}
+
+export async function getAccountBalances(filters: { branchId?: string } = {}) {
+  const auth = await requireRole('ADMIN', 'ACCOUNTANT');
+  if (!auth.ok) return { success: false, error: auth.error };
+
+  try {
+    const effectiveBranchId = resolveBranchFilter(auth.user, filters.branchId);
+    const accounts = await prisma.financialAccount.findMany({
+      orderBy: [{ isSystem: 'desc' }, { type: 'asc' }, { name: 'asc' }],
+    });
+    const balances = await computeAccountBalances(effectiveBranchId ?? undefined);
+
+    const rows = accounts.map((account) => {
+      const b = balances.get(account.id) ?? { income: 0, expense: 0, transfersIn: 0, transfersOut: 0 };
+      return {
+        account,
+        totalIncome: b.income,
+        totalExpense: b.expense,
+        transfersIn: b.transfersIn,
+        transfersOut: b.transfersOut,
+        balance: b.income - b.expense + b.transfersIn - b.transfersOut,
+      };
+    });
+
+    // تراکنش‌های بدون حساب (خودکارِ خرید/حقوق یا دستیِ قدیمی‌تر از این فاز)
+    // برای شفافیت به‌صورت یک ردیفِ جدا نمایش داده می‌شوند، نه در جمعِ هیچ حسابی.
+    const unclassified = balances.get(null) ?? { income: 0, expense: 0, transfersIn: 0, transfersOut: 0 };
+
+    return {
+      success: true,
+      accounts: rows,
+      unclassified: {
+        totalIncome: unclassified.income,
+        totalExpense: unclassified.expense,
+        balance: unclassified.income - unclassified.expense,
+      },
+    };
+  } catch (error) {
+    console.error('Error computing account balances:', error);
+    return { success: false, error: 'Failed to compute account balances' };
+  }
+}
+
+export async function createAccountTransfer(
+  fromAccountId: string,
+  toAccountId: string,
+  amount: number,
+  note?: string
+) {
+  const auth = await requireRole('ADMIN', 'ACCOUNTANT');
+  if (!auth.ok) return { success: false, error: auth.error };
+
+  if (!fromAccountId || !toAccountId) return { success: false, error: 'حساب مبدا و مقصد الزامی است' };
+  if (fromAccountId === toAccountId) return { success: false, error: 'حساب مبدا و مقصد نمی‌تواند یکسان باشد' };
+  if (!Number.isFinite(amount) || amount <= 0) return { success: false, error: 'مبلغ وارد شده معتبر نیست' };
+
+  try {
+    const [fromAccount, toAccount] = await Promise.all([
+      prisma.financialAccount.findUnique({ where: { id: fromAccountId } }),
+      prisma.financialAccount.findUnique({ where: { id: toAccountId } }),
+    ]);
+    if (!fromAccount || !toAccount) return { success: false, error: 'حساب مبدا یا مقصد یافت نشد' };
+    if (!fromAccount.isActive || !toAccount.isActive) {
+      return { success: false, error: 'حساب مبدا/مقصد غیرفعال است' };
+    }
+
+    const transfer = await prisma.accountTransfer.create({
+      data: {
+        fromAccountId,
+        toAccountId,
+        amount,
+        note: note?.trim() || null,
+        createdByUserId: auth.user.id,
+      },
+      include: { fromAccount: true, toAccount: true },
+    });
+
+    return { success: true, transfer };
+  } catch (error) {
+    console.error('Error creating account transfer:', error);
+    return { success: false, error: 'Failed to create account transfer' };
+  }
+}
+
+export async function getAccountTransfers() {
+  const auth = await requireRole('ADMIN', 'ACCOUNTANT');
+  if (!auth.ok) return { success: false, error: auth.error };
+
+  try {
+    const transfers = await prisma.accountTransfer.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: { fromAccount: true, toAccount: true },
+      take: 200,
+    });
+    return { success: true, transfers };
+  } catch (error) {
+    console.error('Error fetching account transfers:', error);
+    return { success: false, error: 'Failed to fetch account transfers' };
+  }
+}
+
+/**
+ * ثبتِ یک جلسه‌ی مغایرت‌گیری. طبق تصمیمِ محدوده‌ی این فاز، فقط مغایرت را
+ * ثبت/نمایش می‌دهد — هیچ تراکنشِ اصلاحیِ خودکاری برای صفر کردنِ آن ساخته
+ * نمی‌شود؛ اگر لازم شد، کارمند می‌تواند خودش یک هزینه/درآمدِ دستی
+ * (createExpense/createIncome با همین accountId) برای اصلاحِ دفاتر ثبت کند.
+ */
+export async function createAccountReconciliation(accountId: string, countedBalance: number, note?: string) {
+  const auth = await requireRole('ADMIN', 'ACCOUNTANT');
+  if (!auth.ok) return { success: false, error: auth.error };
+
+  if (!accountId) return { success: false, error: 'حساب الزامی است' };
+  if (!Number.isFinite(countedBalance)) return { success: false, error: 'موجودی شمرده‌شده نامعتبر است' };
+
+  try {
+    const account = await prisma.financialAccount.findUnique({ where: { id: accountId } });
+    if (!account) return { success: false, error: 'حساب یافت نشد' };
+
+    const balances = await computeAccountBalances();
+    const b = balances.get(accountId) ?? { income: 0, expense: 0, transfersIn: 0, transfersOut: 0 };
+    const computedBalance = b.income - b.expense + b.transfersIn - b.transfersOut;
+    const difference = countedBalance - computedBalance;
+
+    const reconciliation = await prisma.accountReconciliation.create({
+      data: {
+        accountId,
+        computedBalance,
+        countedBalance,
+        difference,
+        note: note?.trim() || null,
+        createdByUserId: auth.user.id,
+      },
+      include: { account: true },
+    });
+
+    return { success: true, reconciliation };
+  } catch (error) {
+    console.error('Error creating account reconciliation:', error);
+    return { success: false, error: 'Failed to create account reconciliation' };
+  }
+}
+
+export async function getAccountReconciliations(accountId?: string) {
+  const auth = await requireRole('ADMIN', 'ACCOUNTANT');
+  if (!auth.ok) return { success: false, error: auth.error };
+
+  try {
+    const reconciliations = await prisma.accountReconciliation.findMany({
+      where: accountId ? { accountId } : {},
+      orderBy: { createdAt: 'desc' },
+      include: { account: true },
+      take: 200,
+    });
+    return { success: true, reconciliations };
+  } catch (error) {
+    console.error('Error fetching account reconciliations:', error);
+    return { success: false, error: 'Failed to fetch account reconciliations' };
   }
 }

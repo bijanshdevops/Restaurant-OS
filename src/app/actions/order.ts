@@ -7,7 +7,7 @@ import { requireRole, resolveBranchFilter, resolveBranchForCreate, isBranchExemp
 import { requireCustomer } from '@/lib/customerAuth';
 import { awardLoyaltyForOrder, pointsForAmount } from '@/lib/loyalty';
 import { getDefaultBranchId } from './branch';
-import { SYSTEM_CATEGORY_IDS } from '@/lib/accountingCategories';
+import { SYSTEM_CATEGORY_IDS, SYSTEM_ACCOUNT_IDS } from '@/lib/accountingCategories';
 import { computeIngredientUsagePerUnit } from '@/lib/recipeExpansion';
 import { applyCouponWithinTx } from './coupon';
 import { applyGiftCardWithinTx } from './giftCard';
@@ -246,7 +246,14 @@ export async function createOrder(
   customerId?: string,
   branchId?: string,
   couponCode?: string,
-  giftCardCode?: string
+  giftCardCode?: string,
+  /**
+   * فاز ۱۸: روش پرداختِ صندوق (نقد/کارت) — پیش از این فاز اصلاً ثبت
+   * نمی‌شد. برای اتصال خودکار درآمدِ این سفارش به حسابِ درستِ جریان نقدی
+   * استفاده می‌شود؛ اگر مشخص نشود (مثلاً فراخوانی‌های قدیمی‌تر/تست‌ها)
+   * پیش‌فرض «نقد» در نظر گرفته می‌شود.
+   */
+  paymentMethod?: 'CASH' | 'CARD'
 ) {
   const auth = await requireRole('ADMIN', 'CASHIER');
   if (!auth.ok) return { success: false, error: auth.error };
@@ -255,6 +262,10 @@ export async function createOrder(
     if (!cartItems || cartItems.length === 0) {
       return { success: false, error: 'سبد سفارش خالی است' };
     }
+    if (paymentMethod !== undefined && paymentMethod !== 'CASH' && paymentMethod !== 'CARD') {
+      return { success: false, error: 'روش پرداخت نامعتبر است' };
+    }
+    const accountId = paymentMethod === 'CARD' ? SYSTEM_ACCOUNT_IDS.BANK : SYSTEM_ACCOUNT_IDS.CASH;
 
     const effectiveBranchId = resolveBranchForCreate(auth.user, branchId);
 
@@ -373,6 +384,7 @@ export async function createOrder(
           taxAmount,
           branchId: effectiveBranchId,
           categoryId: SYSTEM_CATEGORY_IDS.INCOME_POS,
+          accountId,
           referenceType: 'ORDER',
           referenceId: order.id,
           createdByUserId: auth.user.id,
@@ -827,6 +839,8 @@ export async function finalizeOnlineOrderAfterPayment(orderId: string) {
     }
 
     // 2. Automatically record INCOME in the accounting system
+    // فاز ۱۸: سفارش‌های آنلاین/QR همیشه از درگاه زرین‌پال پرداخت می‌شوند
+    // (نک. src/lib/zarinpal.ts) — پس همیشه به حساب «درگاه پرداخت آنلاین» وصل می‌شوند.
     await tx.transaction.create({
       data: {
         type: 'INCOME',
@@ -835,6 +849,7 @@ export async function finalizeOnlineOrderAfterPayment(orderId: string) {
         taxAmount: order.taxAmount,
         branchId: order.branchId,
         categoryId: SYSTEM_CATEGORY_IDS.INCOME_ONLINE,
+        accountId: SYSTEM_ACCOUNT_IDS.GATEWAY,
         referenceType: 'ORDER',
         referenceId: order.id,
       },

@@ -53,6 +53,9 @@ export default function POSPage() {
   const [couponCodeInput, setCouponCodeInput] = useState('');
   const [giftCardCodeInput, setGiftCardCodeInput] = useState('');
 
+  // --- فاز ۱۸: روش پرداخت صندوق، برای اتصال خودکار درآمد به حساب درستِ جریان نقدی ---
+  const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'CARD'>('CASH');
+
   useEffect(() => {
     fetchMenu();
     fetchPrinters();
@@ -132,7 +135,8 @@ export default function POSPage() {
         selectedCustomerId || undefined,
         undefined,
         couponCodeInput.trim() || undefined,
-        giftCardCodeInput.trim() || undefined
+        giftCardCodeInput.trim() || undefined,
+        paymentMethod
       );
       
       if (res.success && res.order) {
@@ -140,6 +144,7 @@ export default function POSPage() {
         setSelectedCustomerId('');
         setCouponCodeInput('');
         setGiftCardCodeInput('');
+        setPaymentMethod('CASH');
         fetchCustomers();
         setLastOrderMessage(`سفارش ${res.order.orderNumber} با موفقیت ثبت شد! مبلغ کل: ${formatCurrency(res.order.totalAmount)}`);
         
@@ -327,6 +332,34 @@ export default function POSPage() {
                 <option key={c.id} value={c.id}>{c.fullName} ({c.phone})</option>
               ))}
             </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-gray-500 mb-1">روش پرداخت</label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setPaymentMethod('CASH')}
+                className={`rounded-lg px-3 py-2 text-sm font-bold border transition-all ${
+                  paymentMethod === 'CASH'
+                    ? 'bg-green-600 text-white border-green-600'
+                    : 'bg-white text-gray-600 border-gray-300 hover:border-green-400'
+                }`}
+              >
+                نقد
+              </button>
+              <button
+                type="button"
+                onClick={() => setPaymentMethod('CARD')}
+                className={`rounded-lg px-3 py-2 text-sm font-bold border transition-all ${
+                  paymentMethod === 'CARD'
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400'
+                }`}
+              >
+                کارت (کارتخوان بانکی)
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-2">

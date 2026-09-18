@@ -43,6 +43,10 @@ model User {
 
   // --- Phase 11: audit log ---
   auditLogs AuditLog[]
+
+  // --- Phase 18: cash flow & bank/cash reconciliation ---
+  createdAccountTransfers      AccountTransfer[]      @relation("AccountTransferCreatedBy")
+  createdAccountReconciliations AccountReconciliation[] @relation("AccountReconciliationCreatedBy")
 }
 
 enum Role {
@@ -579,8 +583,87 @@ model Transaction {
   createdByUserId String?
   createdBy       User?   @relation("TransactionCreatedBy", fields: [createdByUserId], references: [id])
 
+  // --- Phase 18: cash flow & bank/cash reconciliation ---
+  // این تراکنش به کدام حساب (صندوق نقد/بانک/درگاه پرداخت) تعلق دارد. فروش
+  // نقد/کارتیِ صندوق (POS) و سفارش‌های آنلاین/QR (که همیشه از درگاه
+  // زرین‌پال می‌گذرند) خودکار مقداردهی می‌شوند؛ تراکنش‌های خودکار دیگر
+  // (خرید از تأمین‌کننده، حقوق) و تراکنش‌های دستیِ قدیمی‌تر از این فاز فعلاً
+  // بدون حساب (accountId=null) می‌مانند و بعداً از طریق همان اکشنِ
+  // بازطبقه‌بندیِ دسته (updateTransactionCategory) قابل تخصیص‌اند.
+  accountId String?
+  account   FinancialAccount? @relation(fields: [accountId], references: [id])
+
   @@index([categoryId])
   @@index([referenceType, referenceId])
+  @@index([accountId])
+}
+
+// فاز ۱۸: جریان نقدی و مغایرت‌گیری صندوق/بانک.
+//
+// یک «حساب مالی» نمایانگر یک صندوق نقد، حساب بانکی، یا درگاه پرداخت
+// آنلاین است که تراکنش‌های درآمد/هزینه (Transaction.accountId) و
+// انتقال‌های بین‌حسابی (AccountTransfer) به آن مرتبط می‌شوند. سه حساب
+// سیستمی (نقد/بانک/درگاه) در migration این فاز از پیش ساخته شده‌اند؛
+// حساب‌های دلخواه بیشتر را ADMIN/ACCOUNTANT می‌توانند اضافه کنند. موجودیِ
+// هر حساب ذخیره نمی‌شود — همیشه زنده از روی مجموع تراکنش‌ها و انتقال‌های
+// مرتبط محاسبه می‌شود (نک. getAccountBalances در accounting.ts).
+model FinancialAccount {
+  id        String              @id @default(uuid())
+  name      String              @unique
+  type      FinancialAccountType
+  isSystem  Boolean             @default(false)
+  isActive  Boolean             @default(true)
+  createdAt DateTime            @default(now())
+
+  transactions    Transaction[]
+  transfersOut    AccountTransfer[]        @relation("TransferFrom")
+  transfersIn     AccountTransfer[]        @relation("TransferTo")
+  reconciliations AccountReconciliation[]
+}
+
+enum FinancialAccountType {
+  CASH
+  BANK
+  GATEWAY
+  OTHER
+}
+
+// انتقال دستیِ موجودی بین دو حساب مالی (مثلاً واریز نقدیِ صندوق به بانک) —
+// عمداً از جدول Transaction (INCOME/EXPENSE) جدا نگه داشته شده تا هرگز روی
+// صورت سود و زیان یا گزارش مالیات (فاز ۷) اثر نگذارد؛ فقط موجودیِ محاسبه‌شده‌ی
+// دو حساب را جابه‌جا می‌کند.
+model AccountTransfer {
+  id        String   @id @default(uuid())
+  amount    Float
+  note      String?
+  createdAt DateTime @default(now())
+
+  fromAccountId String
+  fromAccount   FinancialAccount @relation("TransferFrom", fields: [fromAccountId], references: [id])
+  toAccountId   String
+  toAccount     FinancialAccount @relation("TransferTo", fields: [toAccountId], references: [id])
+
+  createdByUserId String?
+  createdBy       User?   @relation("AccountTransferCreatedBy", fields: [createdByUserId], references: [id])
+}
+
+// ثبتِ یک جلسه‌ی مغایرت‌گیری: کارمند موجودیِ واقعیِ شمرده‌شده‌ی یک حساب را
+// وارد می‌کند و سیستم آن را با موجودیِ محاسبه‌شده از دفتر مقایسه می‌کند.
+// طبق تصمیمِ محدوده‌ی این فاز، این ثبت فقط برای مستندسازی/بررسیِ بعدی است؛
+// هیچ تراکنشِ اصلاحیِ خودکاری برای صفر کردنِ مغایرت ساخته نمی‌شود.
+model AccountReconciliation {
+  id              String   @id @default(uuid())
+  computedBalance Float
+  countedBalance  Float
+  difference      Float
+  note            String?
+  createdAt       DateTime @default(now())
+
+  accountId String
+  account   FinancialAccount @relation(fields: [accountId], references: [id])
+
+  createdByUserId String?
+  createdBy       User?   @relation("AccountReconciliationCreatedBy", fields: [createdByUserId], references: [id])
 }
 
 enum TransactionType {

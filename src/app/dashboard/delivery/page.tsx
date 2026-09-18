@@ -11,12 +11,27 @@ import {
   advanceDeliveryStatus,
   markDeliveryFailed,
 } from '@/app/actions/delivery';
+import { simulateNextProviderStatus, simulateProviderDeliveryFailure } from '@/app/actions/deliveryProvider';
 
 const STATUS_LABELS: Record<string, string> = {
   PENDING_ASSIGNMENT: 'در انتظار تخصیص',
   ASSIGNED: 'تخصیص یافته',
   PICKED_UP: 'تحویل پیک شد',
   ON_THE_WAY: 'در راه',
+};
+
+// فاز ۱۷: برچسبِ متناظرِ هر deliveryStatus برای سفارش‌هایی که به شخص‌ثالث
+// ارسال شده‌اند — متن کمی متفاوت است چون فاعلِ کار «شخص ثالث» است نه پیکِ داخلی.
+const PROVIDER_STATUS_LABELS: Record<string, string> = {
+  ASSIGNED: 'پذیرفته‌شده توسط شخص ثالث',
+  PICKED_UP: 'تحویل شخص ثالث شد',
+  ON_THE_WAY: 'در راه (شخص ثالث)',
+};
+
+const PROVIDER_NEXT_ACTION_LABELS: Record<string, string> = {
+  ASSIGNED: 'شبیه‌سازی: تحویل به پیک',
+  PICKED_UP: 'شبیه‌سازی: خروج برای ارسال',
+  ON_THE_WAY: 'شبیه‌سازی: تحویل به مشتری',
 };
 
 const NEXT_ACTION_LABELS: Record<string, string> = {
@@ -72,6 +87,16 @@ export default function DeliveryPage() {
 
   const handleFail = async (orderId: string) => {
     await markDeliveryFailed(orderId);
+    fetchAll();
+  };
+
+  const handleSimulateAdvance = async (orderId: string) => {
+    await simulateNextProviderStatus(orderId);
+    fetchAll();
+  };
+
+  const handleSimulateFail = async (orderId: string) => {
+    await simulateProviderDeliveryFailure(orderId);
     fetchAll();
   };
 
@@ -142,15 +167,39 @@ export default function DeliveryPage() {
                     <p className="font-bold text-gray-900">{order.orderNumber}</p>
                     <p className="text-xs text-gray-500">{order.customer?.fullName} — {order.customer?.phone}</p>
                     <p className="text-xs text-gray-500 mt-1">{order.deliveryAddress}</p>
+                    {order.deliveryProvider && (
+                      <p className="text-xs text-purple-600 font-bold mt-1">
+                        📦 شخص ثالث (شبیه‌سازی) — کد پیگیری: <span dir="ltr">{order.externalDeliveryId}</span>
+                      </p>
+                    )}
                   </div>
                   <div className="text-left">
                     <p className="font-bold text-blue-600">{formatCurrency(order.totalAmount)}</p>
-                    <span className="text-xs font-bold text-gray-500">{STATUS_LABELS[order.deliveryStatus]}</span>
+                    <span className="text-xs font-bold text-gray-500">
+                      {order.deliveryProvider
+                        ? PROVIDER_STATUS_LABELS[order.deliveryStatus]
+                        : STATUS_LABELS[order.deliveryStatus]}
+                    </span>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-3 mt-3">
-                  {order.deliveryStatus === 'PENDING_ASSIGNMENT' ? (
+                  {order.deliveryProvider ? (
+                    <>
+                      <button
+                        onClick={() => handleSimulateAdvance(order.id)}
+                        className="bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold px-4 py-2 rounded-lg transition-colors"
+                      >
+                        {PROVIDER_NEXT_ACTION_LABELS[order.deliveryStatus]}
+                      </button>
+                      <button
+                        onClick={() => handleSimulateFail(order.id)}
+                        className="text-red-600 text-xs font-bold px-3 py-2 rounded-lg hover:bg-red-50 transition-colors"
+                      >
+                        شبیه‌سازی: ارسال ناموفق
+                      </button>
+                    </>
+                  ) : order.deliveryStatus === 'PENDING_ASSIGNMENT' ? (
                     <select
                       onChange={(e) => handleAssign(order.id, e.target.value)}
                       defaultValue=""

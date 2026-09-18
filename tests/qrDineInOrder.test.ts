@@ -253,7 +253,13 @@ describe('سفارشِ خودکار مشتری با QR روی میز (فاز ۱�
 
       const finalized = await admin.call('finalizeOnlineOrderAfterPayment', orderRes.order.id);
       expect(finalized.status).toBe('PENDING');
-      expect(finalized.deliveryStatus).toBe('PENDING_ASSIGNMENT');
+      // فاز ۱۷: سفارشِ ONLINE_DELIVERY از این پس بلافاصله خودکار به
+      // شخص‌ثالثِ شبیه‌سازی‌شده ارسال می‌شود (نک. tests/thirdPartyDelivery.test.ts
+      // برای پوششِ کاملِ خودِ این رفتار)؛ اینجا فقط تأیید می‌کنیم که این
+      // ارسالِ خودکار به هیچ‌وجه منطقِ کسرِ موجودیِ شعبه‌ی پیش‌فرض را که این
+      // تستِ رگرسیون بررسی می‌کند تغییر نداده است.
+      expect(finalized.deliveryStatus).toBe('ASSIGNED');
+      expect(finalized.deliveryProvider).toBe('MOCK_EXPRESS');
 
       const after = await readStock(admin, inventoryItemId, defaultBranchId);
       expect(before! - after!).toBe(1 * quantity);

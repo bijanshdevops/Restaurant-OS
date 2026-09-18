@@ -115,7 +115,14 @@ describe('سفارش آنلاین، پرداخت و باشگاه مشتریان 
   it('نهایی‌سازی بعد از پرداخت: موجودی/درآمد/امتیاز اعمال و سفارش وارد صف آشپزخانه می‌شود', async () => {
     const finalized = await admin.call('finalizeOnlineOrderAfterPayment', orderId);
     expect(finalized.status).toBe('PENDING');
-    expect(finalized.deliveryStatus).toBe('PENDING_ASSIGNMENT');
+    // فاز ۱۷: از این پس هر سفارشِ ONLINE_DELIVERY بلافاصله بعد از نهایی‌سازی
+    // به‌صورت خودکار به شخص‌ثالثِ شبیه‌سازی‌شده ارسال می‌شود (نک.
+    // dispatchOrderToThirdPartyProvider) — پس دیگر PENDING_ASSIGNMENT نمی‌ماند.
+    // چرخه‌ی کامل تخصیص/پیشروی دستیِ پیکِ داخلی جداگانه در
+    // tests/thirdPartyDelivery.test.ts پوشش داده شده.
+    expect(finalized.deliveryStatus).toBe('ASSIGNED');
+    expect(finalized.deliveryProvider).toBe('MOCK_EXPRESS');
+    expect(finalized.externalDeliveryId).toBeTruthy();
     expect(finalized.pointsEarned).toBeGreaterThan(0);
 
     const profile = await customer.call('getCustomerProfile');
@@ -141,34 +148,56 @@ describe('سفارش آنلاین، پرداخت و باشگاه مشتریان 
     const res = await customer.call('getMyOnlineOrder', orderId);
     expect(res.success).toBe(true);
     expect(res.order.status).toBe('PENDING');
-    expect(res.order.deliveryStatus).toBe('PENDING_ASSIGNMENT');
+    // فاز ۱۷: این سفارش خودکار به شخص‌ثالث ارسال شده (تست بالاتر)، پس دیگر
+    // PENDING_ASSIGNMENT نیست — مستقیماً ASSIGNED است.
+    expect(res.order.deliveryStatus).toBe('ASSIGNED');
   });
 
-  it('چرخه کامل پیک: تخصیص و پیشروی وضعیت تا تحویل', async () => {
+  // فاز ۱۷: چون از این پس هر سفارشِ ONLINE_DELIVERY به‌طور پیش‌فرض خودکار به
+  // شخص‌ثالثِ شبیه‌سازی‌شده ارسال می‌شود، چرخه‌ی دستیِ پیکِ *داخلی* را روی یک
+  // سفارشِ تازه با نشانه‌ی تستیِ «شکستِ ارسال» (که Provider را وادار به رد
+  // کردنِ آن می‌کند — نک. src/lib/deliveryProviders.ts) تمرین می‌کنیم، دقیقاً
+  // همان چیزی که در واقعیت باعث می‌شود یک سفارش روی گردش‌کارِ دستیِ پیکِ
+  // داخلی بماند. جزئیاتِ کاملِ خودِ فاز ۱۷ (ارسال خودکار، شبیه‌سازیِ وضعیت،
+  // وب‌هوک) در tests/thirdPartyDelivery.test.ts پوشش داده شده.
+  it('چرخه کامل پیک داخلی: وقتی ارسال به شخص‌ثالث شکست بخورد', async () => {
+    const internalOrderRes = await customer.call(
+      'createOnlineOrder',
+      [{ menuItemId, quantity: 1 }],
+      `آدرس تستی پیک داخلی [TEST_DISPATCH_FAIL]`,
+      0
+    );
+    expect(internalOrderRes.success).toBe(true);
+    const internalOrderId = internalOrderRes.order.id;
+
+    const finalizedInternal = await admin.call('finalizeOnlineOrderAfterPayment', internalOrderId);
+    expect(finalizedInternal.deliveryStatus).toBe('PENDING_ASSIGNMENT');
+    expect(finalizedInternal.deliveryProvider).toBeFalsy();
+
     const createCourierRes = await admin.call('createCourier', { name: 'پیک تستی', phone: courierPhone });
     expect(createCourierRes.success).toBe(true);
     courierId = createCourierRes.courier.id;
 
     const board1 = await admin.call('getDeliveryBoard');
     expect(board1.success).toBe(true);
-    expect(board1.orders.some((o: any) => o.id === orderId)).toBe(true);
+    expect(board1.orders.some((o: any) => o.id === internalOrderId)).toBe(true);
 
-    const assignRes = await admin.call('assignCourier', orderId, courierId);
+    const assignRes = await admin.call('assignCourier', internalOrderId, courierId);
     expect(assignRes.success).toBe(true);
     expect(assignRes.order.deliveryStatus).toBe('ASSIGNED');
     expect(assignRes.order.courierId).toBe(courierId);
 
-    const step1 = await admin.call('advanceDeliveryStatus', orderId);
+    const step1 = await admin.call('advanceDeliveryStatus', internalOrderId);
     expect(step1.order.deliveryStatus).toBe('PICKED_UP');
 
-    const step2 = await admin.call('advanceDeliveryStatus', orderId);
+    const step2 = await admin.call('advanceDeliveryStatus', internalOrderId);
     expect(step2.order.deliveryStatus).toBe('ON_THE_WAY');
 
-    const step3 = await admin.call('advanceDeliveryStatus', orderId);
+    const step3 = await admin.call('advanceDeliveryStatus', internalOrderId);
     expect(step3.order.deliveryStatus).toBe('DELIVERED');
     expect(step3.order.status).toBe('COMPLETED');
 
-    const finalOrder = await customer.call('getMyOnlineOrder', orderId);
+    const finalOrder = await customer.call('getMyOnlineOrder', internalOrderId);
     expect(finalOrder.order.courier.id).toBe(courierId);
   });
 

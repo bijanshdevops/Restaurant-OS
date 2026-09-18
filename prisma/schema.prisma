@@ -117,6 +117,16 @@ model Order {
   courier         Courier?        @relation(fields: [courierId], references: [id])
   payment         Payment?
 
+  // --- Phase 17: third-party delivery/courier provider integration ---
+  // وقتی خالی است یعنی این سفارش (اگر اصلاً ارسالی باشد) با گردش‌کار داخلیِ
+  // پیک دستی (نک. courierId بالا) مدیریت می‌شود — بدون تغییر نسبت به قبل.
+  // وقتی مقداردهی شده یعنی سفارش خودکار به شخص‌ثالث ارسال شده و وضعیتش
+  // (deliveryStatus بالا) دیگر از طریق وب‌هوکِ آن سرویس به‌روزرسانی می‌شود، نه
+  // با دکمه‌های دستیِ تخته‌ی تحویل.
+  deliveryProvider    DeliveryProvider?
+  externalDeliveryId  String?           @unique
+  externalTrackingUrl String?
+
   // --- Phase 5: multi-branch support ---
   // شعبه‌ای که این سفارش در آن ثبت شده. برای سفارش‌های حضوری/صندوق همیشه
   // مقداردهی می‌شود؛ سفارش‌های آنلاین فعلاً شعبه‌ی مشخصی ندارند (کانال آنلاین
@@ -167,6 +177,15 @@ enum OrderChannel {
   TAKEAWAY
   ONLINE_DELIVERY
   QR_DINE_IN
+}
+
+// فاز ۱۷: کدام سرویسِ شخص‌ثالثِ پیک این سفارش را در دست دارد. فعلاً فقط یک
+// Provider شبیه‌سازی‌شده وجود دارد (هیچ حساب/مستندات API واقعی‌ای برای اسنپ‌فود،
+// میار یا مشابه در دسترس نیست) — افزودن یک سرویسِ واقعیِ بعدی فقط یک مقدارِ
+// جدید اینجا و یک پیاده‌سازیِ تازه از DeliveryProviderAdapter در
+// src/lib/deliveryProviders.ts نیاز دارد، بدون تغییر در بقیه‌ی برنامه.
+enum DeliveryProvider {
+  MOCK_EXPRESS
 }
 
 enum DeliveryStatus {

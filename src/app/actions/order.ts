@@ -12,6 +12,7 @@ import { computeIngredientUsagePerUnit } from '@/lib/recipeExpansion';
 import { applyCouponWithinTx } from './coupon';
 import { applyGiftCardWithinTx } from './giftCard';
 import { computeEffectivePrice } from '@/lib/happyHour';
+import { dispatchOrderToThirdPartyProvider } from './deliveryProvider';
 
 interface CartItem {
   menuItemId: string;
@@ -774,11 +775,18 @@ export async function getMyOnlineOrder(orderId: string) {
  * Not itself auth-gated: it's only ever called from the payment callback
  * route after the gateway signature/verify step has already succeeded,
  * never directly from the client.
+ *
+ * فاز ۱۷: بلافاصله بعد از این‌که تراکنشِ دیتابیس commit شد، اگر سفارش از
+ * کانال ONLINE_DELIVERY باشد، به‌صورت خودکار به شخص‌ثالث ارسال می‌شود (نک.
+ * dispatchOrderToThirdPartyProvider) — عمداً *بعد* از تراکنش و نه داخل آن،
+ * چون این یک تماس بیرونی (هرچند شبیه‌سازی‌شده) است و نباید یک تراکنش
+ * دیتابیس را باز نگه دارد. شکست این ارسال هرگز کل پرداخت/نهایی‌سازی سفارش را
+ * fail نمی‌کند — سفارش فقط به گردش‌کار دستیِ پیک داخلی سقوط می‌کند.
  */
 export async function finalizeOnlineOrderAfterPayment(orderId: string) {
   const defaultBranchId = await getDefaultBranchId();
 
-  return prisma.$transaction(async (tx) => {
+  const finalizedOrder = await prisma.$transaction(async (tx) => {
     const order = await tx.order.findUnique({
       where: { id: orderId },
       include: { items: { include: { ingredientUsages: true } } },
@@ -859,6 +867,18 @@ export async function finalizeOnlineOrderAfterPayment(orderId: string) {
       },
     });
   });
+
+  // فاز ۱۷: ارسال خودکار به شخص ثالث — فقط برای ONLINE_DELIVERY، و فقط اگر
+  // این فراخوانی واقعاً چیزی را finalize کرده باشد (نه یک callback تکراری
+  // که در بالا زودتر برگشته). شکست اینجا بی‌صدا جذب می‌شود؛ نک. docstring.
+  if (finalizedOrder.channel === 'ONLINE_DELIVERY' && finalizedOrder.status === 'PENDING' && !finalizedOrder.deliveryProvider) {
+    const dispatch = await dispatchOrderToThirdPartyProvider(finalizedOrder.id);
+    if (dispatch.success && dispatch.order) {
+      return dispatch.order;
+    }
+  }
+
+  return finalizedOrder;
 }
 
 /** Cancels an order whose payment failed/was aborted (only from AWAITING_PAYMENT). */

@@ -554,6 +554,36 @@ Covered end-to-end by `tests/qrDineInOrder.test.ts` (`getTableForOrder` for vali
 
 ---
 
+## Third-Party Delivery/Courier Integration (Phase 17)
+
+`ONLINE_DELIVERY` orders can now be dispatched automatically to a third-party courier provider immediately after payment, added **alongside** the existing manual/internal courier workflow (`src/app/actions/delivery.ts`) rather than replacing it — per the user's confirmed scope, dispatch is automatic (never a staff button click), and an order that can't be dispatched simply falls back to the pre-existing manual delivery board.
+
+### No real provider access, so a generic adapter layer plus one simulated provider
+
+No account or API documentation exists for any real courier-aggregation service (SnappFood, Miare, or similar), so this phase ships a pluggable abstraction, `DeliveryProviderAdapter` (`src/lib/deliveryProviders.ts`), with a single simulated implementation, `MOCK_EXPRESS`, registered in `DELIVERY_PROVIDERS`. `MOCK_EXPRESS` always accepts a dispatch synchronously and returns a realistic-looking tracking id/url — the same "always succeeds, no real merchant needed" shape as `src/lib/zarinpal.ts`'s sandbox default. A future real provider is added by implementing the adapter interface once and registering it; nothing else in the app (the dispatch action, the webhook route, the delivery-board UI) needs to change.
+
+### Dispatch and status updates mirror the ZarinPal callback pattern
+
+`finalizeOnlineOrderAfterPayment` (`src/app/actions/order.ts`) calls `dispatchOrderToThirdPartyProvider` right after committing its transaction (deliberately outside the transaction, since dispatch is an external call, however simulated) for every `ONLINE_DELIVERY` order. On success, `Order.deliveryProvider`, `externalDeliveryId`, and `externalTrackingUrl` are set and `deliveryStatus` becomes `ASSIGNED` directly (skipping `PENDING_ASSIGNMENT`, since assignment already happened at the provider). On failure — or when no provider is configured — nothing throws; the order is left exactly as before (`deliveryStatus: 'PENDING_ASSIGNMENT'`, `deliveryProvider: null`) and simply shows up on the existing internal delivery board for manual courier assignment, unchanged from before this phase.
+
+Status progression after dispatch arrives asynchronously, exactly like ZarinPal's payment callback: `receiveDeliveryProviderStatusUpdate` is the handler a real provider's webhook would call, and `src/app/api/delivery-provider/webhook/route.ts` is the real-world HTTP entrypoint (an optional shared-secret header, `DELIVERY_PROVIDER_WEBHOOK_SECRET`, guards it when set). Since no real provider exists to actually send that webhook, two staff-facing actions — `simulateNextProviderStatus` and `simulateProviderDeliveryFailure` — call the same handler directly from the delivery-board UI, clearly labeled "شبیه‌سازی" (simulation) in the UI, so the whole pipeline (dispatch → in-transit → delivered) can be exercised end-to-end without a real courier network.
+
+### Delivery board: one board, two workflows
+
+`getDeliveryBoard` (unchanged) already returns every active `ONLINE_DELIVERY` order regardless of how it's being fulfilled, so the admin delivery board (`/dashboard/delivery`) now branches its controls per order: an order with `deliveryProvider` set shows its tracking id and the two simulate-status buttons; an order without one shows the original courier-assignment dropdown and manual advance/fail buttons, completely unchanged.
+
+### Known scope decisions (disclosed)
+
+- **Every `ONLINE_DELIVERY` order attempts automatic third-party dispatch by default** once `MOCK_EXPRESS` is registered — there is no per-restaurant or per-order toggle to keep every order on the manual internal workflow. A restaurant that wants internal-only delivery would need `DELIVERY_PROVIDER` set to an unregistered value (dispatch then always "fails" and falls back), which is a slightly awkward way to express "don't use this feature" — a cleaner on/off setting is a natural, explicitly deferred enhancement.
+- **This changed the default behavior of existing `ONLINE_DELIVERY` orders** (previously always `PENDING_ASSIGNMENT` after payment, now `ASSIGNED` with a `MOCK_EXPRESS` dispatch by default) — `tests/onlineOrdering.test.ts` and `tests/qrDineInOrder.test.ts` were updated to reflect this, and the internal-courier full-cycle test was moved onto an order carrying a dedicated test-only "force dispatch failure" marker (see below) so the manual/internal workflow stays covered end-to-end.
+- **A test-only marker string, `[TEST_DISPATCH_FAIL]`** (exported as `TEST_FORCE_DISPATCH_FAILURE_MARKER` from `src/lib/deliveryProviders.ts`), makes `MOCK_EXPRESS` deterministically reject a dispatch when present in `deliveryAddress` — the same idea as a payment gateway's "always declines" test card number. This exists because the test suite runs against a real, already-started server process and cannot toggle that process's environment variables mid-run to simulate a provider outage.
+- **No real provider integration exists** — `MOCK_EXPRESS` is the only adapter. Nothing here has been tested against, or is compatible with, any actual courier-aggregator API.
+- **No manual "retry dispatch" action** for an order that fell back to the internal board after a dispatch failure — staff simply assign an internal courier as they always could; a later re-dispatch attempt is a natural, deferred enhancement.
+
+Covered end-to-end by `tests/thirdPartyDelivery.test.ts` (automatic dispatch on finalize, the delivery board surfacing a dispatched order, dispatch idempotency, the dispatch-failure fallback via the test marker, webhook status-update validation, the full staff-simulated status cycle through to `DELIVERED`/`COMPLETED`, simulated-failure, access control, and a regression proving `QR_DINE_IN` orders are never dispatched) plus the updated assertions in `tests/onlineOrdering.test.ts` and `tests/qrDineInOrder.test.ts`.
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, review process, and branching model.

@@ -38,6 +38,12 @@ import {
   advanceDeliveryStatus,
   markDeliveryFailed,
 } from '@/app/actions/delivery';
+import {
+  dispatchOrderToThirdPartyProvider,
+  receiveDeliveryProviderStatusUpdate,
+  simulateNextProviderStatus,
+  simulateProviderDeliveryFailure,
+} from '@/app/actions/deliveryProvider';
 import { getInventoryItems, createInventoryItem, restockInventoryItem } from '@/app/actions/inventory';
 import { getMenuCostAnalysis, getMenuItemRecipe, saveMenuItemRecipe, updateInventoryItemCost } from '@/app/actions/costing';
 import { getSubRecipes, getSubRecipeDetail, saveSubRecipe, deleteSubRecipe } from '@/app/actions/subRecipe';
@@ -181,6 +187,10 @@ const actions: Record<string, (...args: any[]) => Promise<any>> = {
   assignCourier,
   advanceDeliveryStatus,
   markDeliveryFailed,
+  dispatchOrderToThirdPartyProvider,
+  receiveDeliveryProviderStatusUpdate,
+  simulateNextProviderStatus,
+  simulateProviderDeliveryFailure,
   getCustomers,
   createCustomer,
   getCustomerDetail,

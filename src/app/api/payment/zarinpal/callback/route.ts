@@ -21,15 +21,27 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(`${base}/order/checkout?payment=error`);
   }
 
+  // فاز ۱۶: در صورتِ شکست/لغوِ پرداخت، مشتری باید به همان صفحه‌ی
+  // تسویه‌حسابی برگردد که از آن آمده — برای سفارشِ QR روی میز یعنی
+  // /order/table/[tableId]/checkout، نه صفحه‌ی تسویه‌حسابِ آنلاینِ ارسالی.
+  const orderForRedirect = await prisma.order.findUnique({
+    where: { id: orderId },
+    select: { channel: true, tableId: true },
+  });
+  const checkoutUrl =
+    orderForRedirect?.channel === 'QR_DINE_IN' && orderForRedirect.tableId
+      ? `${base}/order/table/${orderForRedirect.tableId}/checkout`
+      : `${base}/order/checkout`;
+
   if (status !== 'OK') {
     await markOnlineOrderPaymentFailed(orderId);
-    return NextResponse.redirect(`${base}/order/checkout?payment=cancelled`);
+    return NextResponse.redirect(`${checkoutUrl}?payment=cancelled`);
   }
 
   try {
     const payment = await prisma.payment.findUnique({ where: { orderId } });
     if (!payment) {
-      return NextResponse.redirect(`${base}/order/checkout?payment=error`);
+      return NextResponse.redirect(`${checkoutUrl}?payment=error`);
     }
 
     // Already finalized by an earlier callback for the same order — just
@@ -45,7 +57,7 @@ export async function GET(request: NextRequest) {
         data: { status: 'FAILED', errorMessage: verification.error },
       });
       await markOnlineOrderPaymentFailed(orderId);
-      return NextResponse.redirect(`${base}/order/checkout?payment=failed`);
+      return NextResponse.redirect(`${checkoutUrl}?payment=failed`);
     }
 
     await prisma.payment.update({
@@ -57,6 +69,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(`${base}/order/orders/${orderId}`);
   } catch (error) {
     console.error('ZarinPal callback error:', error);
-    return NextResponse.redirect(`${base}/order/checkout?payment=error`);
+    return NextResponse.redirect(`${checkoutUrl}?payment=error`);
   }
 }

@@ -166,6 +166,7 @@ enum OrderChannel {
   DINE_IN
   TAKEAWAY
   ONLINE_DELIVERY
+  QR_DINE_IN
 }
 
 enum DeliveryStatus {

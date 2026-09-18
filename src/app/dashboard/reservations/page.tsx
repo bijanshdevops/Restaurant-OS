@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from 'react';
+import QRCode from 'qrcode';
 import {
   getTables,
   createTable,
@@ -95,6 +96,31 @@ export default function ReservationsPage() {
   const [seatingEntryId, setSeatingEntryId] = useState<string | null>(null);
   const [seatTableId, setSeatTableId] = useState('');
   const [formError, setFormError] = useState('');
+
+  // فاز ۱۶: کدِ QR سفارشِ خودکارِ روی میز — تولیدِ سمتِ کلاینت با کتابخانه‌ی
+  // qrcode، بدونِ نیاز به فیلدِ جدید در schema (خودِ UUID میز در URL می‌رود).
+  const [qrModalTable, setQrModalTable] = useState<TableRow | null>(null);
+  const [qrDataUrl, setQrDataUrl] = useState('');
+  const [qrOrderUrl, setQrOrderUrl] = useState('');
+
+  const openQrModal = async (t: TableRow) => {
+    setQrModalTable(t);
+    const url = `${window.location.origin}/order/table/${t.id}`;
+    setQrOrderUrl(url);
+    try {
+      const dataUrl = await QRCode.toDataURL(url, { width: 320, margin: 2 });
+      setQrDataUrl(dataUrl);
+    } catch (e) {
+      console.error('Error generating QR code:', e);
+      setQrDataUrl('');
+    }
+  };
+
+  const closeQrModal = () => {
+    setQrModalTable(null);
+    setQrDataUrl('');
+    setQrOrderUrl('');
+  };
 
   const [formData, setFormData] = useState({
     tableId: '',
@@ -302,6 +328,13 @@ export default function ReservationsPage() {
                 <div className="text-2xl font-black">{toPersianDigits(t.number)}</div>
                 <div className="text-xs font-bold mt-1">{tableStatusLabel[t.status]}</div>
                 <div className="text-xs mt-1 opacity-70">ظرفیت {toPersianDigits(t.capacity)} نفر</div>
+                <button
+                  onClick={() => openQrModal(t)}
+                  className="mt-2 w-full text-[11px] font-bold bg-white/70 hover:bg-white border border-current/30 rounded-lg py-1 transition-colors"
+                  title="کد QR سفارش خودکار روی میز"
+                >
+                  📱 QR سفارش
+                </button>
               </div>
             ))}
           </div>
@@ -581,6 +614,42 @@ export default function ReservationsPage() {
             <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3 bg-gray-50">
               <button onClick={() => setSeatingEntryId(null)} className="px-5 py-2.5 text-sm font-bold text-gray-600 bg-white border border-gray-300 rounded-xl hover:bg-gray-100">انصراف</button>
               <button onClick={handleSeatFromWaitlist} className="px-5 py-2.5 text-sm font-bold text-white bg-emerald-600 rounded-xl hover:bg-emerald-700 shadow-sm">نشاندن</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* فاز ۱۶: کدِ QR سفارشِ خودکارِ روی میز — چاپ/اسکن این کد مشتری را
+          مستقیماً به /order/table/[tableId] می‌برد (پس از ورود با OTP). */}
+      {qrModalTable && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden flex flex-col border border-gray-100">
+            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-indigo-50">
+              <h2 className="text-lg font-bold text-indigo-900">کد QR میز {toPersianDigits(qrModalTable.number)}</h2>
+              <button onClick={closeQrModal} className="text-indigo-400 hover:text-indigo-700 text-2xl leading-none">&times;</button>
+            </div>
+            <div className="p-6 flex flex-col items-center gap-4">
+              {qrDataUrl ? (
+                <img src={qrDataUrl} alt={`کد QR میز ${qrModalTable.number}`} className="w-64 h-64 rounded-xl border border-gray-200" />
+              ) : (
+                <div className="w-64 h-64 flex items-center justify-center text-gray-400 text-sm">در حال تولید کد QR...</div>
+              )}
+              <p className="text-xs text-gray-500 break-all text-center" dir="ltr">{qrOrderUrl}</p>
+              <p className="text-xs text-gray-400 text-center">
+                مشتری با اسکن این کد، پس از ورود با کد یک‌بارمصرف (OTP)، می‌تواند مستقیماً از همین میز سفارش دهد و آنلاین پرداخت کند.
+              </p>
+            </div>
+            <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3 bg-gray-50">
+              <button onClick={closeQrModal} className="px-5 py-2.5 text-sm font-bold text-gray-600 bg-white border border-gray-300 rounded-xl hover:bg-gray-100">بستن</button>
+              {qrDataUrl && (
+                <a
+                  href={qrDataUrl}
+                  download={`table-${qrModalTable.number}-qr.png`}
+                  className="px-5 py-2.5 text-sm font-bold text-white bg-indigo-600 rounded-xl hover:bg-indigo-700 shadow-sm"
+                >
+                  دانلود / چاپ
+                </a>
+              )}
             </div>
           </div>
         </div>

@@ -13,9 +13,17 @@ function OrderGate({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!isLoading && !customer && !isLoginPage) {
+      // فاز ۱۶: اگر مسیرِ جاری صفحه‌ی سفارشِ QR روی میز است، شناسه‌ی میز را
+      // پیش از هدایت به صفحه‌ی ورود ذخیره می‌کنیم تا بعد از ورودِ موفقِ OTP،
+      // مشتری مستقیماً به همان جریانِ سفارشِ حضوری بازگردد، نه منوی آنلاینِ
+      // عمومی — نک. CustomerAuthContext.login().
+      const tableMatch = pathname.match(/^\/order\/table\/([^/]+)/);
+      if (tableMatch) {
+        localStorage.setItem('restaurant_pending_table_id', tableMatch[1]);
+      }
       router.push('/order/login');
     }
-  }, [customer, isLoading, isLoginPage, router]);
+  }, [customer, isLoading, isLoginPage, pathname, router]);
 
   if (isLoginPage) return <>{children}</>;
 

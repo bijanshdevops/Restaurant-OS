@@ -7,11 +7,12 @@ import {
   getActiveOrders,
   updateOrderStatus,
   createOnlineOrder,
+  createDineInQrOrder,
   getMyOnlineOrder,
   finalizeOnlineOrderAfterPayment,
   markOnlineOrderPaymentFailed,
 } from '@/app/actions/order';
-import { getTables, createTable, updateTableStatus, createReservation, getReservations, updateReservationStatus, refundReservationDeposit } from '@/app/actions/reservation';
+import { getTables, createTable, updateTableStatus, createReservation, getReservations, updateReservationStatus, refundReservationDeposit, getTableForOrder } from '@/app/actions/reservation';
 import { getWaitlist, joinWaitlist, seatFromWaitlist, cancelWaitlistEntry } from '@/app/actions/waitlist';
 import { getSettings, updateSettings, updateModianSettings, getPublicOrderSettings } from '@/app/actions/settings';
 import { getUsers } from '@/app/actions/user';
@@ -149,6 +150,7 @@ const actions: Record<string, (...args: any[]) => Promise<any>> = {
   getTables,
   createTable,
   updateTableStatus,
+  getTableForOrder,
   createReservation,
   getReservations,
   updateReservationStatus,
@@ -168,6 +170,7 @@ const actions: Record<string, (...args: any[]) => Promise<any>> = {
   getCustomerProfile,
   getMyReferralInfo,
   createOnlineOrder,
+  createDineInQrOrder,
   getMyOnlineOrder,
   finalizeOnlineOrderAfterPayment,
   markOnlineOrderPaymentFailed,

@@ -595,6 +595,144 @@ export async function createOnlineOrder(
   }
 }
 
+/**
+ * فاز ۱۶: سفارشِ خودکار مشتری با اسکن QR روی میز — معادلِ createOnlineOrder
+ * برای سفارشِ حضوری، با این تفاوت‌ها:
+ *  - نیازی به آدرسِ تحویل نیست و هزینه‌ی ارسال/بسته‌بندی صفر است (مشتری
+ *    همین الان سرِ میز، داخلِ رستوران است).
+ *  - سفارش از همان ابتدا به شعبه‌ی میزِ اسکن‌شده متصل می‌شود (tableId و
+ *    branchId هر دو ست می‌شوند) — برخلافِ سفارشِ آنلاینِ فعلی که branchId
+ *    آن تا لحظه‌ی تسویه هم null می‌ماند؛ همین باعث می‌شود کسرِ موجودی و
+ *    ثبتِ درآمد در finalizeOnlineOrderAfterPayment به شعبه‌ی درست نسبت
+ *    داده شود، نه شعبه‌ی پیش‌فرض (نک. توضیحاتِ آن تابع).
+ *  - درست مثلِ سفارشِ آنلاین، پرداخت هنوز آنلاین و در همان لحظه (Zarinpal)
+ *    است — سفارش تا تأییدِ پرداخت در وضعیتِ AWAITING_PAYMENT می‌ماند و
+ *    موجودی/امتیازِ وفاداری فقط بعد از پرداختِ موفق اعمال می‌شود.
+ *  - وضعیتِ میز (Table.status) در این فاز عمداً دست‌نخورده می‌ماند؛
+ *    مدیریتِ خودکارِ آن (مثلاً تغییر به OCCUPIED هنگامِ سفارش) به فازِ
+ *    بعدی موکول شده — یک تصمیمِ محدوده‌ی آگاهانه، نه یک نقص.
+ */
+export async function createDineInQrOrder(
+  tableId: string,
+  cartItems: CartItem[],
+  pointsToRedeem: number = 0,
+  couponCode?: string,
+  giftCardCode?: string
+) {
+  const auth = await requireCustomer();
+  if (!auth.ok) return { success: false, error: auth.error };
+
+  if (!tableId || typeof tableId !== 'string') {
+    return { success: false, error: 'شناسه‌ی میز نامعتبر است' };
+  }
+  if (!cartItems || cartItems.length === 0) {
+    return { success: false, error: 'سبد سفارش خالی است' };
+  }
+  const redeemRequested = Math.max(0, Math.floor(pointsToRedeem || 0));
+
+  try {
+    const table = await prisma.table.findUnique({ where: { id: tableId } });
+    if (!table) {
+      return { success: false, error: 'میز یافت نشد. لطفاً کد QR را دوباره اسکن کنید' };
+    }
+
+    const orderNumber = `ORD-${randomBytes(2).toString('hex').toUpperCase()}`;
+
+    const result = await prisma.$transaction(async (tx) => {
+      const { resolvedLines, subtotal } = await verifyCartItems(tx, cartItems);
+
+      const [settings, customer] = await Promise.all([
+        tx.restaurantSettings.findUnique({ where: { id: 'default' } }),
+        tx.customer.findUnique({ where: { id: auth.customer.id } }),
+      ]);
+      if (!customer) throw new Error('مشتری یافت نشد');
+
+      const taxAmount = settings ? Math.round((subtotal * settings.taxPercentage) / 100) : 0;
+      const pointValue = settings?.loyaltyPointValueToman ?? 1000;
+
+      // بدونِ هزینه‌ی بسته‌بندی/ارسال — نک. docstring بالا.
+      const preDiscountTotal = subtotal + taxAmount;
+
+      let couponId: string | null = null;
+      let couponCodeSnapshot: string | null = null;
+      let discountAmount = 0;
+      if (couponCode?.trim()) {
+        const applied = await applyCouponWithinTx(tx, couponCode, subtotal);
+        couponId = applied.couponId;
+        couponCodeSnapshot = applied.couponCode;
+        discountAmount = applied.discountAmount;
+      }
+      const afterCoupon = Math.max(0, preDiscountTotal - discountAmount);
+
+      const maxRedeemableByBalance = Math.max(0, customer.pointsBalance);
+      const maxRedeemableByOrderValue = Math.floor(afterCoupon / Math.max(pointValue, 1));
+      const pointsRedeemed = Math.min(redeemRequested, maxRedeemableByBalance, maxRedeemableByOrderValue);
+      const pointsDiscount = pointsRedeemed * pointValue;
+      const preGiftCardTotal = Math.max(0, afterCoupon - pointsDiscount);
+
+      let giftCardId: string | null = null;
+      let giftCardAmountUsed = 0;
+      if (giftCardCode?.trim()) {
+        const applied = await applyGiftCardWithinTx(tx, giftCardCode, preGiftCardTotal);
+        giftCardId = applied.giftCardId;
+        giftCardAmountUsed = applied.amountUsed;
+      }
+      const totalAmount = preGiftCardTotal - giftCardAmountUsed;
+
+      const order = await tx.order.create({
+        data: {
+          orderNumber,
+          totalAmount,
+          taxAmount,
+          status: 'AWAITING_PAYMENT',
+          channel: 'QR_DINE_IN',
+          customerId: customer.id,
+          tableId: table.id,
+          branchId: table.branchId,
+          deliveryFee: 0,
+          pointsRedeemed,
+          couponId,
+          couponCode: couponCodeSnapshot,
+          discountAmount,
+          giftCardId,
+          giftCardAmountUsed,
+        },
+      });
+
+      if (giftCardId && giftCardAmountUsed > 0) {
+        const giftCard = await tx.giftCard.findUniqueOrThrow({ where: { id: giftCardId } });
+        await tx.giftCardTransaction.create({
+          data: {
+            giftCardId,
+            orderId: order.id,
+            type: 'REDEEM',
+            amount: giftCardAmountUsed,
+            balanceAfter: giftCard.currentBalance,
+          },
+        });
+      }
+
+      await createOrderItemsWithSnapshots(tx, order.id, resolvedLines);
+
+      const payment = await tx.payment.create({
+        data: {
+          orderId: order.id,
+          provider: 'ZARINPAL',
+          status: 'PENDING',
+          amount: totalAmount,
+        },
+      });
+
+      return { order, payment };
+    });
+
+    return { success: true, order: result.order, payment: result.payment };
+  } catch (error: any) {
+    console.error('Error creating dine-in QR order:', error);
+    return { success: false, error: error?.message || 'خطا در ثبت سفارش' };
+  }
+}
+
 export async function getMyOnlineOrder(orderId: string) {
   const auth = await requireCustomer();
   if (!auth.ok) return { success: false, error: auth.error };
@@ -618,17 +756,20 @@ export async function getMyOnlineOrder(orderId: string) {
 }
 
 /**
- * Finalizes an online order once its payment has been confirmed by the
- * gateway: deducts inventory, books income, awards/redeems loyalty points,
- * and flips the order into the kitchen + delivery pipeline. Idempotent —
- * safe to call twice for the same order (e.g. a duplicated gateway
- * callback) since it only acts on orders still in AWAITING_PAYMENT.
+ * Finalizes an online/QR-dine-in order once its payment has been confirmed
+ * by the gateway: deducts inventory, books income, awards/redeems loyalty
+ * points, and flips the order into the kitchen (+ delivery, when
+ * applicable) pipeline. Idempotent — safe to call twice for the same order
+ * (e.g. a duplicated gateway callback) since it only acts on orders still
+ * in AWAITING_PAYMENT.
  *
- * Online orders carry no branchId of their own (see createOnlineOrder), so
- * stock is deducted from the default branch's BranchInventoryStock — the
- * one designated fulfillment point for online orders until per-branch
- * online ordering exists. The booked INCOME transaction stays branchless
- * too, matching Order.branchId.
+ * ONLINE_DELIVERY orders still carry no branchId of their own (see
+ * createOnlineOrder), so their stock/income are attributed to the default
+ * branch — unchanged from before Phase 16. QR_DINE_IN orders (فاز ۱۶) DO
+ * carry a real branchId (the scanned table's branch — see
+ * createDineInQrOrder), so those are attributed to that branch instead.
+ * deliveryStatus is only ever set for ONLINE_DELIVERY — a QR dine-in order
+ * goes straight to the kitchen and has no delivery leg.
  *
  * Not itself auth-gated: it's only ever called from the payment callback
  * route after the gateway signature/verify step has already succeeded,
@@ -649,9 +790,15 @@ export async function finalizeOnlineOrderAfterPayment(orderId: string) {
       return order;
     }
 
+    // فاز ۱۶: سفارشِ QR روی میز از قبل به شعبه‌ی میزِ اسکن‌شده متصل است
+    // (order.branchId) — پس کسرِ موجودی/درآمد باید به همان شعبه نسبت داده
+    // شود، نه شعبه‌ی پیش‌فرض؛ سفارشِ آنلاینِ ارسالی مثلِ قبل branchId ندارد.
+    const effectiveBranchId = order.branchId ?? defaultBranchId;
+    const channelLabel = order.channel === 'QR_DINE_IN' ? 'QR روی میز' : 'آنلاین';
+
     // 1. Deduct ingredient stock according to each item's SNAPSHOTTED usage
-    // (OrderItemIngredientUsage — محاسبه‌شده در لحظه‌ی createOnlineOrder، نه
-    // فرمولِ زنده‌ی فعلی؛ فاز ۱۳) — از موجودیِ شعبه‌ی پیش‌فرض (نک. docstring).
+    // (OrderItemIngredientUsage — محاسبه‌شده در لحظه‌ی ثبتِ سفارش، نه
+    // فرمولِ زنده‌ی فعلی؛ فاز ۱۳) — از موجودیِ شعبه‌ی مؤثر (نک. docstring).
     const stockDeductions = new Map<string, number>();
     for (const item of order.items) {
       for (const usage of item.ingredientUsages) {
@@ -665,7 +812,7 @@ export async function finalizeOnlineOrderAfterPayment(orderId: string) {
     for (const [inventoryItemId, amount] of stockDeductions) {
       await tx.branchInventoryStock.update({
         where: {
-          branchId_inventoryItemId: { branchId: defaultBranchId, inventoryItemId },
+          branchId_inventoryItemId: { branchId: effectiveBranchId, inventoryItemId },
         },
         data: { currentStock: { decrement: amount } },
       });
@@ -675,9 +822,10 @@ export async function finalizeOnlineOrderAfterPayment(orderId: string) {
     await tx.transaction.create({
       data: {
         type: 'INCOME',
-        description: `درآمد از سفارش آنلاین ${order.orderNumber}`,
+        description: `درآمد از سفارش ${channelLabel} ${order.orderNumber}`,
         amount: order.totalAmount,
         taxAmount: order.taxAmount,
+        branchId: order.branchId,
         categoryId: SYSTEM_CATEGORY_IDS.INCOME_ONLINE,
         referenceType: 'ORDER',
         referenceId: order.id,
@@ -699,10 +847,16 @@ export async function finalizeOnlineOrderAfterPayment(orderId: string) {
       });
     }
 
-    // 4. Move the order into the kitchen queue + delivery pipeline
+    // 4. Move the order into the kitchen queue (+ delivery pipeline, فقط
+    // برای سفارشِ آنلاینِ ارسالی — سفارشِ QR روی میز مستقیماً به آشپزخانه
+    // می‌رود و deliveryStatus برایش بی‌معناست؛ نک. docstring بالا).
     return tx.order.update({
       where: { id: order.id },
-      data: { status: 'PENDING', deliveryStatus: 'PENDING_ASSIGNMENT', pointsEarned },
+      data: {
+        status: 'PENDING',
+        deliveryStatus: order.channel === 'ONLINE_DELIVERY' ? 'PENDING_ASSIGNMENT' : undefined,
+        pointsEarned,
+      },
     });
   });
 }

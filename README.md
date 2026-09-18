@@ -523,6 +523,37 @@ Covered end-to-end by `tests/combosHappyHour.test.ts` (access control on all ten
 
 ---
 
+## QR-Code Table Self-Ordering (Phase 16)
+
+Customers scan a QR code printed/displayed at their table and place their own order from their phone, without staff intervention. Per the user's confirmed scope: **login via OTP is required** (no anonymous/guest ordering — the same OTP flow as existing online ordering) and **payment is online, at order-creation time**, through the same Zarinpal gateway already used for online delivery — there is no "pay later at the table" option in this phase.
+
+### A new order channel, not a repurposed one
+
+Rather than reusing the existing `DINE_IN` channel (which the POS already uses for staff-entered dine-in orders), Phase 16 adds a new `OrderChannel` value, `QR_DINE_IN`, so self-ordered QR orders stay distinguishable from staff-entered ones in analytics and reporting. `Order.tableId` and the `Table.orders` relation already existed in the schema (added in an earlier phase) but were never actually populated by any code before this phase — `createDineInQrOrder` (`src/app/actions/order.ts`) is their first real consumer.
+
+The customer-facing flow mirrors the existing online-ordering one almost exactly, reusing its infrastructure rather than duplicating it conceptually: `requireCustomer()` for the OTP gate, `verifyCartItems` for server-trusted pricing, `createOrderItemsWithSnapshots` for the recipe/ingredient-usage snapshot (Phase 13), and `applyCouponWithinTx`/`applyGiftCardWithinTx` for Phase 14's discount layering — all unmodified. `initiatePayment` and the Zarinpal payment callback route were already channel-agnostic and needed no changes to support the new channel; only the payment callback's *failure/cancellation redirect* was made channel-aware (see below), so an unsuccessful QR payment sends the customer back to their table's own checkout page rather than the online-delivery one.
+
+### Branch-aware finalization: an improvement over the existing online-order pattern
+
+A QR order is created with a real `branchId` and `tableId` from the moment it's placed (the scanned table's own branch), unlike an `ONLINE_DELIVERY` order, which still has no branch of its own until fulfillment. `finalizeOnlineOrderAfterPayment` was made channel-aware: it now deducts ingredient stock and books the income `Transaction` against the *table's actual branch* for `QR_DINE_IN` orders, falling back to the previous "default branch" behavior only for `ONLINE_DELIVERY` orders (whose behavior is completely unchanged — see the regression test in `tests/qrDineInOrder.test.ts`). `deliveryStatus` is only ever set for `ONLINE_DELIVERY`; a QR dine-in order has no delivery leg and goes straight to the kitchen queue.
+
+### Customer-facing pages and the admin QR display
+
+New pages under `/order/table/[tableId]` (menu) and `/order/table/[tableId]/checkout` (checkout, without the delivery-address field and without the packaging/delivery-fee line items) mirror the existing `/order` and `/order/checkout` pages. Because the shared `OrderGate` (in `src/app/order/layout.tsx`) redirects any unauthenticated visit under `/order` to `/order/login`, it now also remembers the scanned table id (in `localStorage`) before redirecting, and `CustomerAuthContext.login()` sends the customer back to their table's own menu — not the generic online menu — once OTP verification succeeds.
+
+Each table's QR code is generated **client-side** in the admin Reservations page (`📱 QR سفارش` button on each table card, using the `qrcode` package) and simply encodes `<app origin>/order/table/<table's own UUID>` — no new schema field or server-generated token was introduced for this; the table's existing primary key is the only identifier in the code.
+
+### Known scope decisions (disclosed)
+
+- **`Table.status` is not automatically managed by QR orders in this phase.** A table doesn't flip to `OCCUPIED` when a QR order comes in, and doesn't flip back on completion — exactly as today, `Table.status` remains driven only by the reservation lifecycle. Wiring QR orders into table-status automation is a natural, explicitly deferred next step.
+- **The QR code encodes the table's raw UUID directly**, with no separate rotating/expiring token. Anyone who captures the URL (not just by scanning the printed code) can open that table's ordering page for as long as it exists — acceptable given OTP login is still required to actually place and pay for an order, but worth knowing if a stronger anti-tampering guarantee is ever wanted.
+- **The cart is shared between the online-delivery flow and the QR dine-in flow** (both reuse the same `CartContext`/`localStorage` key). If a customer has items sitting in an online-delivery cart and then scans a table's QR code, those items carry into the dine-in order. This was not called out as a concern in scoping and is treated as acceptable "it's still just their cart" behavior rather than a bug.
+- **No packaging cost is charged on QR dine-in orders** (food is served on plates, not packaged) — this is the one line-item difference from the online-delivery total beyond the already-confirmed absence of a delivery fee.
+
+Covered end-to-end by `tests/qrDineInOrder.test.ts` (`getTableForOrder` for valid/invalid tables, `createDineInQrOrder` requiring OTP login and rejecting an invalid table or empty cart, correct total/channel/tableId/branchId/zero-delivery-fee on a successful order, `finalizeOnlineOrderAfterPayment`'s branch-aware stock deduction and income attribution to the table's own branch with `deliveryStatus` left unset, a regression test proving the existing `ONLINE_DELIVERY` finalize path is completely unaffected, and `getMyOnlineOrder` correctly reused for tracking a QR order with proper ownership isolation).
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, review process, and branching model.

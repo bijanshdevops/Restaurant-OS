@@ -39,6 +39,17 @@ export function CustomerAuthProvider({ children }: { children: React.ReactNode }
   const login = (newCustomer: CustomerSessionInfo) => {
     setCustomer(newCustomer);
     localStorage.setItem('restaurant_customer', JSON.stringify(newCustomer));
+
+    // فاز ۱۶: اگر مشتری از طریقِ اسکنِ QR روی میز به صفحه‌ی ورود هدایت شده
+    // بود (نک. OrderGate در layout.tsx)، بعد از ورودِ موفق باید مستقیماً به
+    // همان جریانِ سفارشِ حضوری برگردد، نه منوی آنلاینِ عمومی.
+    const pendingTableId = localStorage.getItem('restaurant_pending_table_id');
+    if (pendingTableId) {
+      localStorage.removeItem('restaurant_pending_table_id');
+      router.push(`/order/table/${pendingTableId}`);
+      return;
+    }
+
     router.push('/order');
   };
 

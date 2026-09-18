@@ -74,6 +74,32 @@ export async function updateTableStatus(tableId: string, status: TableStatus) {
   }
 }
 
+// فاز ۱۶: سفارشِ خودکار مشتری با اسکن QR روی میز.
+// این اکشن عمداً بدون احراز هویت است — پیش از ورودِ مشتری (OTP) هم باید
+// بتوان بررسی کرد که کد QR معتبر است و شماره/شعبه‌ی میز را به او نشان داد.
+// هیچ اطلاعاتِ حساسی (مثل لیستِ رزروها) در این پاسخ برگردانده نمی‌شود.
+export async function getTableForOrder(tableId: string) {
+  try {
+    if (!tableId || typeof tableId !== 'string') {
+      return { success: false, error: 'شناسه‌ی میز نامعتبر است' };
+    }
+    const table = await prisma.table.findUnique({
+      where: { id: tableId },
+      select: { id: true, number: true, branch: { select: { id: true, name: true } } },
+    });
+    if (!table) {
+      return { success: false, error: 'میز یافت نشد. لطفاً کد QR را دوباره اسکن کنید' };
+    }
+    return {
+      success: true,
+      table: { id: table.id, number: table.number, branchId: table.branch.id, branchName: table.branch.name },
+    };
+  } catch (error) {
+    console.error('Error fetching table for order:', error);
+    return { success: false, error: 'خطا در دریافت اطلاعات میز' };
+  }
+}
+
 // ---------- Reservations ----------
 
 const ACTIVE_STATUSES: ReservationStatus[] = ['PENDING', 'CONFIRMED', 'SEATED'];

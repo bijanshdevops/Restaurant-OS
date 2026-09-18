@@ -108,6 +108,14 @@ import {
   checkGiftCardBalance,
 } from '@/app/actions/giftCard';
 import { getCoupons, createCoupon, updateCoupon, deleteCoupon, checkCouponForOrder } from '@/app/actions/coupon';
+import { getCombos, getComboEligibleMenuItems, createCombo, updateCombo, deleteCombo } from '@/app/actions/combo';
+import {
+  getHappyHourRules,
+  getHappyHourEligibleMenuItems,
+  createHappyHourRule,
+  updateHappyHourRule,
+  deleteHappyHourRule,
+} from '@/app/actions/happyHour';
 
 /**
  * دروازه‌ی کمکی مخصوص تست‌های خودکار (Vitest / CI).
@@ -259,6 +267,16 @@ const actions: Record<string, (...args: any[]) => Promise<any>> = {
   updateCoupon,
   deleteCoupon,
   checkCouponForOrder,
+  getCombos,
+  getComboEligibleMenuItems,
+  createCombo,
+  updateCombo,
+  deleteCombo,
+  getHappyHourRules,
+  getHappyHourEligibleMenuItems,
+  createHappyHourRule,
+  updateHappyHourRule,
+  deleteHappyHourRule,
 };
 
 function guard() {

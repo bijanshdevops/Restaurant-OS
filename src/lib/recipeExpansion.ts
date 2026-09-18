@@ -86,11 +86,37 @@ export async function expandSubRecipeUsagePerUnit(
   return expandSubRecipeUsage(db, subRecipeId, new Set(), 0);
 }
 
-/** بسطِ فرمولِ پایه‌ی یک آیتم منو (بدون مدیفایر) به مصرفِ مواد اولیه‌ی خام، به‌ازای یک واحد از آن آیتم. */
+/**
+ * بسطِ فرمولِ پایه‌ی یک آیتم منو (بدون مدیفایر) به مصرفِ مواد اولیه‌ی خام،
+ * به‌ازای یک واحد از آن آیتم.
+ *
+ * فاز ۱۵: اگر این آیتمِ منو در واقع آیتمِ سایه‌ی یک Combo باشد (نک.
+ * توضیحِ Combo در schema.prisma)، فرمولِ آن هرگز از رویِ RecipeItem خودش
+ * خوانده نمی‌شود (که همیشه برای این‌جور آیتم‌ها خالی می‌ماند) — به‌جایش
+ * از ترکیبِ فرمولِ «یک واحد» از هر کدام از اجزای Combo (که خودشان آیتمِ
+ * منویِ معمولی‌اند و می‌توانند فرمول/زیرفرمولِ خودشان را داشته باشند)،
+ * ضرب‌شده در تعدادِ آن جزء در Combo، محاسبه می‌شود. مدیفایر برای اجزای
+ * Combo اعمال نمی‌شود (تصمیمِ محدوده‌ی این فاز).
+ */
 export async function expandMenuItemBaseUsage(
   menuItemId: string,
   db: DbClient = prisma
 ): Promise<Map<string, number>> {
+  const combo = await db.combo.findUnique({
+    where: { menuItemId },
+    include: { items: true },
+  });
+  if (combo) {
+    const result = new Map<string, number>();
+    for (const comboItem of combo.items) {
+      const perUnit = await computeIngredientUsagePerUnit(comboItem.menuItemId, [], db);
+      for (const [invId, qty] of perUnit) {
+        addTo(result, invId, qty * comboItem.quantity);
+      }
+    }
+    return result;
+  }
+
   const lines = await db.recipeItem.findMany({ where: { menuItemId } });
   const result = new Map<string, number>();
 

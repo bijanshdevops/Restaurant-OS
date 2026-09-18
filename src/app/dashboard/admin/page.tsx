@@ -18,7 +18,15 @@ import {
 import { getSettings, updateSettings } from '@/app/actions/settings';
 import { getGiftCards, issueGiftCard, deactivateGiftCard } from '@/app/actions/giftCard';
 import { getCoupons, createCoupon, updateCoupon, deleteCoupon } from '@/app/actions/coupon';
-import { Role, PrinterType, PrinterConnectionType, CouponDiscountType } from '@prisma/client';
+import { getCombos, getComboEligibleMenuItems, createCombo, updateCombo, deleteCombo } from '@/app/actions/combo';
+import {
+  getHappyHourRules,
+  getHappyHourEligibleMenuItems,
+  createHappyHourRule,
+  updateHappyHourRule,
+  deleteHappyHourRule,
+} from '@/app/actions/happyHour';
+import { Role, PrinterType, PrinterConnectionType, CouponDiscountType, HappyHourDiscountType } from '@prisma/client';
 
 interface MenuItem {
   id: string;
@@ -165,8 +173,76 @@ interface CouponRow {
   createdAt: string | Date;
 }
 
+// --- فاز ۱۵: کمبو و Happy Hour ---
+interface EligibleMenuItemOption {
+  id: string;
+  title: string;
+  price: number;
+  category: string;
+}
+
+interface ComboItemRow {
+  id: string;
+  comboId: string;
+  menuItemId: string;
+  quantity: number;
+  menuItem: { id: string; title: string; price: number };
+}
+
+interface ComboRow {
+  id: string;
+  name: string;
+  price: number;
+  isActive: boolean;
+  menuItemId: string;
+  menuItem: {
+    id: string;
+    title: string;
+    price: number;
+    isCombo: boolean;
+    kitchenStation: string | null;
+    isAvailable: boolean;
+  };
+  items: ComboItemRow[];
+}
+
+interface ComboItemLine {
+  menuItemId: string;
+  quantity: number;
+}
+
+interface HappyHourRuleItemRow {
+  id: string;
+  ruleId: string;
+  menuItemId: string;
+  menuItem?: { id: string; title: string };
+}
+
+interface HappyHourRuleRow {
+  id: string;
+  name: string;
+  discountType: HappyHourDiscountType;
+  value: number;
+  daysOfWeek: number[];
+  startMinute: number;
+  endMinute: number;
+  isActive: boolean;
+  items: HappyHourRuleItemRow[];
+}
+
+/** ترتیب استانداردِ هفته‌ی فارسی (شنبه اول) به همراه شماره‌ی روزِ جاوااسکریپتی (Date.getDay()). */
+const PERSIAN_WEEK_DAYS: { jsDay: number; label: string }[] = [
+  { jsDay: 6, label: 'شنبه' },
+  { jsDay: 0, label: 'یکشنبه' },
+  { jsDay: 1, label: 'دوشنبه' },
+  { jsDay: 2, label: 'سه‌شنبه' },
+  { jsDay: 3, label: 'چهارشنبه' },
+  { jsDay: 4, label: 'پنج‌شنبه' },
+  { jsDay: 5, label: 'جمعه' },
+];
+
 export default function AdminPage() {
-  const [activeTab, setActiveTab] = useState<'menu' | 'settings' | 'users' | 'printers' | 'costing' | 'subrecipes' | 'modifiers' | 'giftcards' | 'coupons'>('menu');
+  const [activeTab, setActiveTab] = useState<'menu' | 'settings' | 'users' | 'printers' | 'costing' | 'subrecipes' | 'modifiers' | 'giftcards' | 'coupons' | 'combos' | 'happyhour'>('menu');
   
   // --- Menu Management State ---
   const [items, setItems] = useState<MenuItem[]>([]);
@@ -278,6 +354,37 @@ export default function AdminPage() {
   const [couponExpiresAt, setCouponExpiresAt] = useState('');
   const [isSavingCoupon, setIsSavingCoupon] = useState(false);
   const [couponError, setCouponError] = useState('');
+
+  // --- Combos (فاز ۱۵) State ---
+  const [combos, setCombos] = useState<ComboRow[]>([]);
+  const [isLoadingCombos, setIsLoadingCombos] = useState(false);
+  const [comboEligibleItems, setComboEligibleItems] = useState<EligibleMenuItemOption[]>([]);
+  const [isComboModalOpen, setIsComboModalOpen] = useState(false);
+  const [editingComboId, setEditingComboId] = useState<string | null>(null);
+  const [comboName, setComboName] = useState('');
+  const [comboPrice, setComboPrice] = useState(0);
+  const [comboKitchenStation, setComboKitchenStation] = useState('');
+  const [comboIsActive, setComboIsActive] = useState(true);
+  const [comboItemLines, setComboItemLines] = useState<ComboItemLine[]>([]);
+  const [isSavingCombo, setIsSavingCombo] = useState(false);
+  const [comboError, setComboError] = useState('');
+
+  // --- Happy Hour (فاز ۱۵) State ---
+  const [happyHourRules, setHappyHourRules] = useState<HappyHourRuleRow[]>([]);
+  const [isLoadingHappyHour, setIsLoadingHappyHour] = useState(false);
+  const [happyHourEligibleItems, setHappyHourEligibleItems] = useState<EligibleMenuItemOption[]>([]);
+  const [isHappyHourModalOpen, setIsHappyHourModalOpen] = useState(false);
+  const [editingHappyHourId, setEditingHappyHourId] = useState<string | null>(null);
+  const [happyHourName, setHappyHourName] = useState('');
+  const [happyHourDiscountType, setHappyHourDiscountType] = useState<HappyHourDiscountType>('PERCENT');
+  const [happyHourValue, setHappyHourValue] = useState(0);
+  const [happyHourDays, setHappyHourDays] = useState<number[]>([]);
+  const [happyHourStartTime, setHappyHourStartTime] = useState('00:00');
+  const [happyHourEndTime, setHappyHourEndTime] = useState('00:00');
+  const [happyHourIsActive, setHappyHourIsActive] = useState(true);
+  const [happyHourMenuItemIds, setHappyHourMenuItemIds] = useState<string[]>([]);
+  const [isSavingHappyHour, setIsSavingHappyHour] = useState(false);
+  const [happyHourError, setHappyHourError] = useState('');
 
   // --- Bulk Import State ---
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
@@ -399,6 +506,18 @@ export default function AdminPage() {
   useEffect(() => {
     if (activeTab === 'coupons' && coupons.length === 0) {
       fetchCoupons();
+    }
+  }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (activeTab === 'combos' && combos.length === 0) {
+      fetchCombos();
+    }
+  }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (activeTab === 'happyhour' && happyHourRules.length === 0) {
+      fetchHappyHourRules();
     }
   }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1187,6 +1306,214 @@ export default function AdminPage() {
     if (res.success) fetchCoupons();
   };
 
+  // --- Combos (فاز ۱۵) Handlers ---
+  const fetchCombos = async () => {
+    setIsLoadingCombos(true);
+    const res = await getCombos();
+    if (res.success) setCombos(((res as any).combos || []) as ComboRow[]);
+    setIsLoadingCombos(false);
+  };
+
+  const fetchComboEligibleItems = async () => {
+    const res = await getComboEligibleMenuItems();
+    if (res.success) setComboEligibleItems(((res as any).items || []) as EligibleMenuItemOption[]);
+  };
+
+  const openNewComboModal = async () => {
+    setEditingComboId(null);
+    setComboName('');
+    setComboPrice(0);
+    setComboKitchenStation('');
+    setComboIsActive(true);
+    setComboItemLines([{ menuItemId: '', quantity: 1 }]);
+    setComboError('');
+    await fetchComboEligibleItems();
+    setIsComboModalOpen(true);
+  };
+
+  const openEditComboModal = async (c: ComboRow) => {
+    setEditingComboId(c.id);
+    setComboName(c.name);
+    setComboPrice(c.price);
+    setComboKitchenStation(c.menuItem?.kitchenStation || '');
+    setComboIsActive(c.isActive);
+    setComboItemLines(
+      c.items.length > 0
+        ? c.items.map(i => ({ menuItemId: i.menuItemId, quantity: i.quantity }))
+        : [{ menuItemId: '', quantity: 1 }]
+    );
+    setComboError('');
+    await fetchComboEligibleItems();
+    setIsComboModalOpen(true);
+  };
+
+  const closeComboModal = () => {
+    setIsComboModalOpen(false);
+    setEditingComboId(null);
+  };
+
+  const addComboItemLine = () => {
+    setComboItemLines([...comboItemLines, { menuItemId: '', quantity: 1 }]);
+  };
+
+  const removeComboItemLine = (index: number) => {
+    setComboItemLines(comboItemLines.filter((_, i) => i !== index));
+  };
+
+  const updateComboItemLine = (index: number, field: 'menuItemId' | 'quantity', value: string | number) => {
+    setComboItemLines(comboItemLines.map((line, i) => (i === index ? { ...line, [field]: value } : line)));
+  };
+
+  const handleSaveCombo = async () => {
+    setIsSavingCombo(true);
+    setComboError('');
+    const input = {
+      name: comboName,
+      price: comboPrice,
+      kitchenStation: comboKitchenStation.trim() || undefined,
+      isActive: comboIsActive,
+      items: comboItemLines.filter(l => l.menuItemId && l.quantity > 0),
+    };
+    const res = editingComboId ? await updateCombo(editingComboId, input) : await createCombo(input);
+    setIsSavingCombo(false);
+    if (res.success) {
+      closeComboModal();
+      fetchCombos();
+    } else {
+      setComboError((res as any).error || 'خطا در ذخیره‌ی کمبو');
+    }
+  };
+
+  const handleDeleteCombo = async (id: string) => {
+    if (!confirm('آیا از حذف این کمبو مطمئن هستید؟')) return;
+    const res = await deleteCombo(id);
+    if (res.success) {
+      if ((res as any).deactivatedInstead) {
+        alert('این کمبو قبلاً در سفارشی استفاده شده بود، پس به‌جای حذف، فقط غیرفعال شد.');
+      }
+      fetchCombos();
+    } else {
+      alert((res as any).error || 'خطا در حذف کمبو');
+    }
+  };
+
+  // --- Happy Hour (فاز ۱۵) Handlers ---
+  const fetchHappyHourRules = async () => {
+    setIsLoadingHappyHour(true);
+    const res = await getHappyHourRules();
+    if (res.success) setHappyHourRules(((res as any).rules || []) as HappyHourRuleRow[]);
+    setIsLoadingHappyHour(false);
+  };
+
+  const fetchHappyHourEligibleItems = async () => {
+    const res = await getHappyHourEligibleMenuItems();
+    if (res.success) setHappyHourEligibleItems(((res as any).items || []) as EligibleMenuItemOption[]);
+  };
+
+  const minutesToTimeString = (minutes: number) => {
+    const h = Math.floor(minutes / 60) % 24;
+    const m = minutes % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  };
+
+  const timeStringToMinutes = (time: string) => {
+    const [h, m] = time.split(':').map(n => parseInt(n, 10) || 0);
+    return h * 60 + m;
+  };
+
+  const openNewHappyHourModal = async () => {
+    setEditingHappyHourId(null);
+    setHappyHourName('');
+    setHappyHourDiscountType('PERCENT');
+    setHappyHourValue(0);
+    setHappyHourDays([]);
+    setHappyHourStartTime('00:00');
+    setHappyHourEndTime('00:00');
+    setHappyHourIsActive(true);
+    setHappyHourMenuItemIds([]);
+    setHappyHourError('');
+    await fetchHappyHourEligibleItems();
+    setIsHappyHourModalOpen(true);
+  };
+
+  const openEditHappyHourModal = async (r: HappyHourRuleRow) => {
+    setEditingHappyHourId(r.id);
+    setHappyHourName(r.name);
+    setHappyHourDiscountType(r.discountType);
+    setHappyHourValue(r.value);
+    setHappyHourDays(r.daysOfWeek);
+    setHappyHourStartTime(minutesToTimeString(r.startMinute));
+    setHappyHourEndTime(minutesToTimeString(r.endMinute));
+    setHappyHourIsActive(r.isActive);
+    setHappyHourMenuItemIds(r.items.map(i => i.menuItemId));
+    setHappyHourError('');
+    await fetchHappyHourEligibleItems();
+    setIsHappyHourModalOpen(true);
+  };
+
+  const closeHappyHourModal = () => {
+    setIsHappyHourModalOpen(false);
+    setEditingHappyHourId(null);
+  };
+
+  const toggleHappyHourDay = (day: number) => {
+    setHappyHourDays(happyHourDays.includes(day) ? happyHourDays.filter(d => d !== day) : [...happyHourDays, day]);
+  };
+
+  const toggleHappyHourMenuItem = (id: string) => {
+    setHappyHourMenuItemIds(
+      happyHourMenuItemIds.includes(id) ? happyHourMenuItemIds.filter(i => i !== id) : [...happyHourMenuItemIds, id]
+    );
+  };
+
+  const handleSaveHappyHour = async () => {
+    setIsSavingHappyHour(true);
+    setHappyHourError('');
+    const input = {
+      name: happyHourName,
+      discountType: happyHourDiscountType,
+      value: happyHourValue,
+      daysOfWeek: happyHourDays,
+      startMinute: timeStringToMinutes(happyHourStartTime),
+      endMinute: timeStringToMinutes(happyHourEndTime),
+      isActive: happyHourIsActive,
+      menuItemIds: happyHourMenuItemIds,
+    };
+    const res = editingHappyHourId
+      ? await updateHappyHourRule(editingHappyHourId, input)
+      : await createHappyHourRule(input);
+    setIsSavingHappyHour(false);
+    if (res.success) {
+      closeHappyHourModal();
+      fetchHappyHourRules();
+    } else {
+      setHappyHourError((res as any).error || 'خطا در ذخیره‌ی قانونِ Happy Hour');
+    }
+  };
+
+  const handleDeleteHappyHourRule = async (id: string) => {
+    if (!confirm('آیا از حذف این قانونِ Happy Hour مطمئن هستید؟')) return;
+    const res = await deleteHappyHourRule(id);
+    if (res.success) {
+      fetchHappyHourRules();
+    } else {
+      alert((res as any).error || 'خطا در حذف قانونِ Happy Hour');
+    }
+  };
+
+  // اعتبارسنجیِ سمتِ کلاینت — آینه‌ی همان قواعدِ سرور، فقط برای بازخوردِ فوری؛ سرور همچنان مرجعِ نهایی است.
+  const isComboFormValid =
+    comboName.trim().length > 0 &&
+    comboPrice > 0 &&
+    comboItemLines.some(l => l.menuItemId && l.quantity > 0);
+
+  const isHappyHourFormValid =
+    happyHourName.trim().length > 0 &&
+    (happyHourDiscountType === 'PERCENT' ? happyHourValue > 0 && happyHourValue <= 100 : happyHourValue > 0) &&
+    happyHourDays.length > 0 &&
+    happyHourMenuItemIds.length > 0 &&
+    timeStringToMinutes(happyHourStartTime) !== timeStringToMinutes(happyHourEndTime);
+
   return (
     <div className="space-y-6">
       {/* Top Header & Tab Navigation */}
@@ -1275,6 +1602,26 @@ export default function AdminPage() {
               }`}
             >
               🏷️ کدهای تخفیف
+            </button>
+            <button
+              onClick={() => setActiveTab('combos')}
+              className={`px-6 py-3 font-bold text-sm transition-colors border-b-2 -mb-px ${
+                activeTab === 'combos'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              🍱 کمبوها
+            </button>
+            <button
+              onClick={() => setActiveTab('happyhour')}
+              className={`px-6 py-3 font-bold text-sm transition-colors border-b-2 -mb-px ${
+                activeTab === 'happyhour'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              ⏰ Happy Hour
             </button>
             <button
               onClick={() => setActiveTab('settings')}
@@ -2009,6 +2356,152 @@ export default function AdminPage() {
         </div>
       )}
 
+      {/* -------------------- COMBOS TAB (فاز ۱۵) -------------------- */}
+      {activeTab === 'combos' && (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-300">
+          <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+            <div>
+              <h2 className="text-lg font-bold text-gray-800">کمبوها</h2>
+              <p className="text-xs text-gray-500 mt-0.5">بسته‌ای چند آیتمی از منو با یک قیمتِ ثابت — به‌عنوان یک آیتمِ جداگانه در منو نمایش داده می‌شود</p>
+            </div>
+            <button
+              onClick={openNewComboModal}
+              className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition-all shadow-sm hover:shadow flex items-center gap-2 text-sm"
+            >
+              ➕ کمبوی جدید
+            </button>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+            {isLoadingCombos ? (
+              <div className="text-center text-gray-500 text-sm py-10 animate-pulse">درحال بارگذاری...</div>
+            ) : combos.length === 0 ? (
+              <div className="text-center text-gray-400 text-sm py-10">هنوز کمبویی ثبت نشده است.</div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-gray-500 text-xs">
+                  <tr>
+                    <th className="px-6 py-3 text-right font-bold">نام</th>
+                    <th className="px-6 py-3 text-right font-bold">قیمت</th>
+                    <th className="px-6 py-3 text-right font-bold">اجزا</th>
+                    <th className="px-6 py-3 text-right font-bold">وضعیت</th>
+                    <th className="px-6 py-3 text-center font-bold">عملیات</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {combos.map(c => (
+                    <tr key={c.id} className="hover:bg-gray-50">
+                      <td className="px-6 py-3 font-semibold text-gray-800">{c.name}</td>
+                      <td className="px-6 py-3 text-gray-500" dir="ltr">{formatCurrency(c.price)}</td>
+                      <td className="px-6 py-3 text-gray-500 max-w-xs">
+                        {c.items.map(i => `${i.menuItem.title} ×${toPersianDigits(i.quantity)}`).join('، ')}
+                      </td>
+                      <td className="px-6 py-3">
+                        <span className={`text-xs font-bold px-2 py-1 rounded-full ${c.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                          {c.isActive ? 'فعال' : 'غیرفعال'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-3 text-center whitespace-nowrap">
+                        <button
+                          onClick={() => openEditComboModal(c)}
+                          className="text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-md transition-colors text-xs font-semibold ml-2"
+                        >
+                          ویرایش
+                        </button>
+                        <button
+                          onClick={() => handleDeleteCombo(c.id)}
+                          className="text-red-600 hover:text-red-800 bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-md transition-colors text-xs font-semibold"
+                        >
+                          حذف
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* -------------------- HAPPY HOUR TAB (فاز ۱۵) -------------------- */}
+      {activeTab === 'happyhour' && (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-300">
+          <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+            <div>
+              <h2 className="text-lg font-bold text-gray-800">Happy Hour</h2>
+              <p className="text-xs text-gray-500 mt-0.5">تخفیفِ زمان‌بندی‌شده روی آیتم‌های منتخبِ منو، در روزها و بازه‌های ساعتیِ مشخص</p>
+            </div>
+            <button
+              onClick={openNewHappyHourModal}
+              className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition-all shadow-sm hover:shadow flex items-center gap-2 text-sm"
+            >
+              ➕ قانونِ جدید
+            </button>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+            {isLoadingHappyHour ? (
+              <div className="text-center text-gray-500 text-sm py-10 animate-pulse">درحال بارگذاری...</div>
+            ) : happyHourRules.length === 0 ? (
+              <div className="text-center text-gray-400 text-sm py-10">هنوز قانونِ Happy Hour ثبت نشده است.</div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-gray-500 text-xs">
+                  <tr>
+                    <th className="px-6 py-3 text-right font-bold">نام</th>
+                    <th className="px-6 py-3 text-right font-bold">تخفیف</th>
+                    <th className="px-6 py-3 text-right font-bold">روزها</th>
+                    <th className="px-6 py-3 text-right font-bold">بازه‌ی ساعتی</th>
+                    <th className="px-6 py-3 text-right font-bold">آیتم‌ها</th>
+                    <th className="px-6 py-3 text-right font-bold">وضعیت</th>
+                    <th className="px-6 py-3 text-center font-bold">عملیات</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {happyHourRules.map(r => (
+                    <tr key={r.id} className="hover:bg-gray-50">
+                      <td className="px-6 py-3 font-semibold text-gray-800">{r.name}</td>
+                      <td className="px-6 py-3 text-gray-500" dir="ltr">
+                        {r.discountType === 'PERCENT' ? `${toPersianDigits(r.value)}٪` : formatCurrency(r.value)}
+                      </td>
+                      <td className="px-6 py-3 text-gray-500">
+                        {PERSIAN_WEEK_DAYS.filter(d => r.daysOfWeek.includes(d.jsDay)).map(d => d.label).join('، ')}
+                      </td>
+                      <td className="px-6 py-3 text-gray-500" dir="ltr">
+                        {toPersianDigits(minutesToTimeString(r.startMinute))}–{toPersianDigits(minutesToTimeString(r.endMinute))}
+                      </td>
+                      <td className="px-6 py-3 text-gray-500 max-w-xs">
+                        {r.items.map(i => i.menuItem?.title).filter(Boolean).join('، ')}
+                      </td>
+                      <td className="px-6 py-3">
+                        <span className={`text-xs font-bold px-2 py-1 rounded-full ${r.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                          {r.isActive ? 'فعال' : 'غیرفعال'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-3 text-center whitespace-nowrap">
+                        <button
+                          onClick={() => openEditHappyHourModal(r)}
+                          className="text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-md transition-colors text-xs font-semibold ml-2"
+                        >
+                          ویرایش
+                        </button>
+                        <button
+                          onClick={() => handleDeleteHappyHourRule(r.id)}
+                          className="text-red-600 hover:text-red-800 bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-md transition-colors text-xs font-semibold"
+                        >
+                          حذف
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* -------------------- RECIPE MODAL (For Cost Analysis Tab) -------------------- */}
       {isRecipeModalOpen && activeTab === 'costing' && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -2651,6 +3144,263 @@ export default function AdminPage() {
                 className="px-5 py-2 rounded-lg text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-60 transition-colors"
               >
                 {isSavingCoupon ? 'درحال ذخیره...' : 'ذخیره کد تخفیف'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* -------------------- COMBO MODAL (فاز ۱۵) -------------------- */}
+      {isComboModalOpen && activeTab === 'combos' && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200">
+            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+              <h3 className="font-bold text-gray-900">{editingComboId ? 'ویرایش کمبو' : 'کمبوی جدید'}</h3>
+              <button onClick={closeComboModal} className="text-gray-400 hover:text-gray-700 text-xl leading-none">✕</button>
+            </div>
+
+            <div className="p-6 overflow-y-auto flex-1 space-y-4">
+              {comboError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3">{comboError}</div>
+              )}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-gray-600 mb-1">نام کمبو</label>
+                  <input
+                    type="text"
+                    value={comboName}
+                    onChange={e => setComboName(e.target.value)}
+                    placeholder="مثلاً «کمبوی خانواده»"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-600 mb-1">قیمت (تومان)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={comboPrice || ''}
+                    onChange={e => setComboPrice(parseFloat(e.target.value) || 0)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-left outline-none focus:border-blue-500"
+                    dir="ltr"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3 items-end">
+                <div>
+                  <label className="block text-xs font-bold text-gray-600 mb-1">ایستگاه آشپزخانه (اختیاری)</label>
+                  <input
+                    type="text"
+                    value={comboKitchenStation}
+                    onChange={e => setComboKitchenStation(e.target.value)}
+                    placeholder="مثلاً «گریل»"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div className="flex items-center gap-2 pb-2">
+                  <input
+                    type="checkbox"
+                    id="comboIsActive"
+                    checked={comboIsActive}
+                    onChange={e => setComboIsActive(e.target.checked)}
+                    className="w-4 h-4"
+                  />
+                  <label htmlFor="comboIsActive" className="text-sm font-bold text-gray-600">فعال</label>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-xs font-bold text-gray-600">اجزای کمبو</p>
+                {comboItemLines.map((line, index) => (
+                  <div key={index} className="flex items-center gap-2">
+                    <select
+                      value={line.menuItemId}
+                      onChange={e => updateComboItemLine(index, 'menuItemId', e.target.value)}
+                      className="flex-1 border border-gray-300 rounded-lg px-2 py-1.5 text-xs bg-white outline-none focus:border-blue-500"
+                    >
+                      <option value="">— انتخاب آیتم منو —</option>
+                      {comboEligibleItems.map(mi => (
+                        <option key={mi.id} value={mi.id}>{mi.title} ({formatCurrency(mi.price)} تومان)</option>
+                      ))}
+                    </select>
+                    <input
+                      type="number"
+                      min={1}
+                      placeholder="تعداد"
+                      value={line.quantity || ''}
+                      onChange={e => updateComboItemLine(index, 'quantity', parseInt(e.target.value, 10) || 0)}
+                      className="w-20 border border-gray-300 rounded-lg px-2 py-1.5 text-xs text-left outline-none focus:border-blue-500"
+                      dir="ltr"
+                    />
+                    <button onClick={() => removeComboItemLine(index)} className="text-red-500 hover:text-red-700 px-2 text-sm">حذف</button>
+                  </div>
+                ))}
+                {comboItemLines.length === 0 && (
+                  <p className="text-center text-gray-400 text-sm py-4">هنوز آیتمی اضافه نشده است.</p>
+                )}
+                <button
+                  onClick={addComboItemLine}
+                  className="w-full border-2 border-dashed border-gray-300 hover:border-blue-400 hover:text-blue-600 text-gray-500 rounded-xl py-2.5 text-sm font-semibold transition-colors"
+                >
+                  ➕ افزودن آیتم به کمبو
+                </button>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
+              <button onClick={closeComboModal} className="px-4 py-2 rounded-lg text-sm font-bold text-gray-600 hover:bg-gray-200 transition-colors">
+                انصراف
+              </button>
+              <button
+                onClick={handleSaveCombo}
+                disabled={isSavingCombo || !isComboFormValid}
+                className="px-5 py-2 rounded-lg text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-60 transition-colors"
+              >
+                {isSavingCombo ? 'درحال ذخیره...' : 'ذخیره کمبو'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* -------------------- HAPPY HOUR MODAL (فاز ۱۵) -------------------- */}
+      {isHappyHourModalOpen && activeTab === 'happyhour' && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200">
+            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+              <h3 className="font-bold text-gray-900">{editingHappyHourId ? 'ویرایش قانونِ Happy Hour' : 'قانونِ Happy Hour جدید'}</h3>
+              <button onClick={closeHappyHourModal} className="text-gray-400 hover:text-gray-700 text-xl leading-none">✕</button>
+            </div>
+
+            <div className="p-6 overflow-y-auto flex-1 space-y-4">
+              {happyHourError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3">{happyHourError}</div>
+              )}
+              <div>
+                <label className="block text-xs font-bold text-gray-600 mb-1">نام قانون</label>
+                <input
+                  type="text"
+                  value={happyHourName}
+                  onChange={e => setHappyHourName(e.target.value)}
+                  placeholder="مثلاً «تخفیفِ بعدازظهر»"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-gray-600 mb-1">نوع تخفیف</label>
+                  <select
+                    value={happyHourDiscountType}
+                    onChange={e => setHappyHourDiscountType(e.target.value as HappyHourDiscountType)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white outline-none focus:border-blue-500"
+                  >
+                    <option value="PERCENT">درصدی</option>
+                    <option value="FIXED">مبلغ ثابت</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-600 mb-1">
+                    {happyHourDiscountType === 'PERCENT' ? 'درصد تخفیف (٪)' : 'مبلغ تخفیف (تومان)'}
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={happyHourDiscountType === 'PERCENT' ? 100 : undefined}
+                    value={happyHourValue || ''}
+                    onChange={e => setHappyHourValue(parseFloat(e.target.value) || 0)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-left outline-none focus:border-blue-500"
+                    dir="ltr"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-gray-600 mb-2">روزهای هفته</label>
+                <div className="flex flex-wrap gap-2">
+                  {PERSIAN_WEEK_DAYS.map(d => (
+                    <button
+                      key={d.jsDay}
+                      type="button"
+                      onClick={() => toggleHappyHourDay(d.jsDay)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
+                        happyHourDays.includes(d.jsDay)
+                          ? 'bg-blue-600 border-blue-600 text-white'
+                          : 'bg-white border-gray-300 text-gray-500 hover:border-blue-400'
+                      }`}
+                    >
+                      {d.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-gray-600 mb-1">ساعت شروع</label>
+                  <input
+                    type="time"
+                    value={happyHourStartTime}
+                    onChange={e => setHappyHourStartTime(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-left outline-none focus:border-blue-500"
+                    dir="ltr"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-600 mb-1">ساعت پایان</label>
+                  <input
+                    type="time"
+                    value={happyHourEndTime}
+                    onChange={e => setHappyHourEndTime(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-left outline-none focus:border-blue-500"
+                    dir="ltr"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="happyHourIsActive"
+                  checked={happyHourIsActive}
+                  onChange={e => setHappyHourIsActive(e.target.checked)}
+                  className="w-4 h-4"
+                />
+                <label htmlFor="happyHourIsActive" className="text-sm font-bold text-gray-600">فعال</label>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-gray-600 mb-2">آیتم‌های مشمول</label>
+                <div className="border border-gray-200 rounded-xl p-3 max-h-48 overflow-y-auto space-y-1.5 bg-gray-50">
+                  {happyHourEligibleItems.length === 0 ? (
+                    <p className="text-center text-gray-400 text-sm py-2">آیتمی برای انتخاب یافت نشد.</p>
+                  ) : (
+                    happyHourEligibleItems.map(mi => (
+                      <label key={mi.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={happyHourMenuItemIds.includes(mi.id)}
+                          onChange={() => toggleHappyHourMenuItem(mi.id)}
+                          className="w-4 h-4"
+                        />
+                        <span className="text-gray-700">{mi.title}</span>
+                        <span className="text-gray-400 text-xs" dir="ltr">({formatCurrency(mi.price)} تومان)</span>
+                      </label>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
+              <button onClick={closeHappyHourModal} className="px-4 py-2 rounded-lg text-sm font-bold text-gray-600 hover:bg-gray-200 transition-colors">
+                انصراف
+              </button>
+              <button
+                onClick={handleSaveHappyHour}
+                disabled={isSavingHappyHour || !isHappyHourFormValid}
+                className="px-5 py-2 rounded-lg text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-60 transition-colors"
+              >
+                {isSavingHappyHour ? 'درحال ذخیره...' : 'ذخیره قانون'}
               </button>
             </div>
           </div>

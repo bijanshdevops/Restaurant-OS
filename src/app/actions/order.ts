@@ -11,6 +11,7 @@ import { SYSTEM_CATEGORY_IDS } from '@/lib/accountingCategories';
 import { computeIngredientUsagePerUnit } from '@/lib/recipeExpansion';
 import { applyCouponWithinTx } from './coupon';
 import { applyGiftCardWithinTx } from './giftCard';
+import { computeEffectivePrice } from '@/lib/happyHour';
 
 interface CartItem {
   menuItemId: string;
@@ -21,10 +22,14 @@ interface CartItem {
 
 interface ResolvedCartLine {
   cartItem: CartItem;
-  menuItem: { id: string; title: string; price: number; isAvailable: boolean };
-  /** قیمتِ واحد نهایی = قیمتِ پایه‌ی آیتم منو + مجموعِ priceDelta مدیفایرهای انتخابی. */
+  menuItem: { id: string; title: string; price: number; isAvailable: boolean; isCombo: boolean };
+  /** قیمتِ واحد نهایی = قیمتِ پایه‌ی آیتم منو (بعد از تخفیفِ احتمالیِ Happy Hour) + مجموعِ priceDelta مدیفایرهای انتخابی. */
   unitPrice: number;
   selectedModifiers: { id: string; name: string; priceDelta: number }[];
+  /** فاز ۱۵: قانونِ Happy Hourِ اعمال‌شده (اگر بود) — روی قیمتِ پایه، پیش از مدیفایرها. */
+  happyHourRuleId: string | null;
+  happyHourRuleName: string | null;
+  happyHourDiscountPerUnit: number;
 }
 
 /**
@@ -52,9 +57,13 @@ async function verifyCartItems(
     where: { id: { in: menuItemIds } },
     include: {
       modifierGroupLinks: { include: { modifierGroup: { include: { modifiers: true } } } },
+      // فاز ۱۵: برای محاسبه‌ی قیمتِ مؤثرِ Happy Hour (فقط رویِ آیتم‌های
+      // معمولی معنا دارد؛ آیتم‌های combo هرگز به قانونی وصل نمی‌شوند).
+      happyHourRuleLinks: { include: { rule: true } },
     },
   });
   const menuItemMap = new Map(menuItems.map((m) => [m.id, m]));
+  const now = new Date();
 
   const resolvedLines: ResolvedCartLine[] = [];
   let subtotal = 0;
@@ -108,10 +117,28 @@ async function verifyCartItems(
       }
     }
 
-    const unitPrice = menuItem.price + selectedModifiers.reduce((s, m) => s + m.priceDelta, 0);
+    // فاز ۱۵: تخفیفِ Happy Hour (اگر بود) رویِ قیمتِ پایه اعمال می‌شود،
+    // پیش از افزودنِ priceDelta مدیفایرها — و هرگز رویِ آیتمِ combo (که
+    // اصلاً هیچ‌وقت به یک قانون وصل نمی‌شود، پس این حلقه برایش بدونِ اثر
+    // است).
+    const { effectivePrice, discountAmount, appliedRuleId, appliedRuleName } = computeEffectivePrice(
+      menuItem.price,
+      menuItem.happyHourRuleLinks.map((l) => l.rule),
+      now
+    );
+
+    const unitPrice = effectivePrice + selectedModifiers.reduce((s, m) => s + m.priceDelta, 0);
     subtotal += unitPrice * cartItem.quantity;
 
-    resolvedLines.push({ cartItem, menuItem, unitPrice, selectedModifiers });
+    resolvedLines.push({
+      cartItem,
+      menuItem,
+      unitPrice,
+      selectedModifiers,
+      happyHourRuleId: appliedRuleId,
+      happyHourRuleName: appliedRuleName,
+      happyHourDiscountPerUnit: discountAmount,
+    });
   }
 
   return { resolvedLines, subtotal };
@@ -147,8 +174,30 @@ async function createOrderItemsWithSnapshots(
         menuItemId: line.menuItem.id,
         quantity: line.cartItem.quantity,
         priceAtTime: line.unitPrice,
+        happyHourRuleId: line.happyHourRuleId,
+        happyHourRuleName: line.happyHourRuleName,
+        happyHourDiscountPerUnit: line.happyHourDiscountPerUnit,
       },
     });
+
+    // فاز ۱۵: عکسِ لحظه‌ایِ اجزای Combo (فقط وقتی این ردیف یک آیتمِ combo
+    // باشد) — نک. توضیحِ OrderItemComboComponent در schema.prisma.
+    if (line.menuItem.isCombo) {
+      const combo = await tx.combo.findUnique({
+        where: { menuItemId: line.menuItem.id },
+        include: { items: { include: { menuItem: { select: { id: true, title: true } } } } },
+      });
+      if (combo && combo.items.length > 0) {
+        await tx.orderItemComboComponent.createMany({
+          data: combo.items.map((ci) => ({
+            orderItemId: orderItem.id,
+            menuItemId: ci.menuItemId,
+            menuItemTitle: ci.menuItem.title,
+            quantity: ci.quantity,
+          })),
+        });
+      }
+    }
 
     if (line.selectedModifiers.length > 0) {
       await tx.orderItemModifier.createMany({
@@ -366,7 +415,10 @@ export async function getActiveOrders(branchId?: string) {
         ...(effectiveBranchId ? { OR: [{ branchId: effectiveBranchId }, { branchId: null }] } : {}),
       },
       include: {
-        items: { include: { menuItem: true } },
+        // فاز ۱۵: عکسِ لحظه‌ایِ اجزای کمبو هم برگردانده می‌شود تا هم تست‌ها
+        // آن را تأیید کنند و هم در آینده (تابلوی آشپزخانه/چاپگر) قابلِ نمایش
+        // باشد — نک. توضیحِ OrderItemComboComponent در schema.prisma.
+        items: { include: { menuItem: true, comboComponents: true } },
         branch: { select: { id: true, name: true } },
       },
       orderBy: { createdAt: 'asc' },

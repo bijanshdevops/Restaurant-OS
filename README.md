@@ -493,6 +493,36 @@ Covered end-to-end by `tests/giftCardsCoupons.test.ts` (access control including
 
 ---
 
+## Combo Meals & Happy Hour Pricing (Phase 15)
+
+Both sub-features the user asked for shipped together in this phase, with management access scoped to **`ADMIN`-only** — the same access model as Phases 13/14.
+
+### Combos: the "shadow menu item" architecture
+
+A `Combo` (a fixed-price bundle of other menu items) is represented internally by giving it a dedicated, hidden `MenuItem` row (`isCombo: true`) whose title/price/kitchen-station/availability are kept in sync with the `Combo` by `src/app/actions/combo.ts`. This means the cart, POS grid, online menu, kitchen board, printer/receipts, refund flow, and sales analytics all need **zero code changes** to support combos — every one of them already just reads "a menu item" off an `OrderItem`. The only place that needed to become combo-aware is `src/lib/recipeExpansion.ts`, which expands a combo's ingredient usage from its `ComboItem` components (each component's own recipe × its quantity in the combo) instead of `RecipeItem` rows, which are never populated for a shadow item.
+
+A combo cannot contain another combo (rejected server-side, not just hidden from the picker) and does not support modifiers in this phase. Deleting a combo that has never been ordered removes both the `Combo` row and its shadow menu item outright; deleting one already used in an order deactivates both instead (`deactivatedInstead: true`), so historical orders keep an intact menu-item reference — the same conditional-delete pattern Phase 14 established for coupons.
+
+A new `OrderItemComboComponent` table snapshots each combo's components (menu item, title, quantity) at the moment the order is created, independent of later edits to the combo's own definition.
+
+### Happy Hour: scheduled discounts on regular menu items
+
+A `HappyHourRule` (a `PERCENT` 1–100 or `FIXED` discount) targets one or more ordinary (non-combo) menu items via `HappyHourRuleItem`, and is active on a set of days (`daysOfWeek`, using JavaScript's `Date.getDay()` convention) within a `startMinute`–`endMinute` window (minutes since midnight), with correct handling of a window that crosses midnight (e.g. 23:00–01:00). The pure calculation logic — `isRuleActiveNow`, `ruleDiscountAmount`, `computeEffectivePrice` — lives in `src/lib/happyHour.ts`, deliberately free of any database dependency so it can be unit-tested directly and reused by both order pricing and any future menu-display code. When multiple active rules match the same item at once, the rule giving the customer the **largest** discount is the one applied.
+
+Order pricing (`verifyCartItems` in `order.ts`) computes each line's Happy-Hour-adjusted price at the moment the order is created and stores it as a per-line snapshot on `OrderItem` (`happyHourRuleId`, `happyHourRuleName`, `happyHourDiscountPerUnit`) — the same "snapshot what actually happened" pattern used for recipe usage (Phase 13) and coupon/gift-card codes (Phase 14). Later edits or deletion of the rule never retroactively change a past order's numbers (`onDelete: SetNull` on the FK, with `happyHourRuleName` kept as an independent string).
+
+### Known scope decisions (disclosed)
+
+- **Happy Hour never applies to combos.** A combo already has its own fixed bundle price, and a menu item flagged `isCombo` is excluded server-side from ever being selectable as a Happy Hour rule's target — not just hidden from the admin picker.
+- **The admin UI does not detect or block overlapping Happy Hour rules at save time.** Two rules can legally cover the same item/time window; the "largest discount wins" rule at order time resolves the conflict correctly, but an admin creating overlapping rules gets no warning about it — deliberately out of scope for this phase.
+- **"Current time" for Happy Hour matching is the server's own clock (`new Date()`)**, consistent with how the rest of the codebase already treats time — there is no explicit restaurant-timezone concept introduced by this phase.
+- **The `OrderItemComboComponent` snapshot is captured but not yet displayed anywhere** — the kitchen ticket and printed receipt still show only the combo's own name, exactly like any other menu item. Surfacing the component breakdown there is a natural, explicitly deferred future enhancement.
+- **The POS/online browsing screens do not show a live discounted price for Happy-Hour items.** The client-side price shown while browsing remains the item's regular price (the same simplification already accepted for tax/coupon estimates before this phase); the real Happy-Hour-adjusted price is computed and charged correctly server-side at actual order creation, which is what the tests verify.
+
+Covered end-to-end by `tests/combosHappyHour.test.ts` (access control on all ten new actions, combo creation/validation including the combo-in-combo rejection, combo ordering proving the bundle price — not the sum of components' prices — is charged and that each component's own recipe is deducted from inventory in the correct multiplied amount, the `OrderItemComboComponent` snapshot's contents, combo deletion's hard-delete-vs-deactivate behavior, a combo-order refund proving ingredient restocking still works unchanged, Happy Hour rule validation, unit tests of the pure `src/lib/happyHour.ts` functions including the midnight-crossing window and the largest-discount-wins tie-break, and integration tests through real order creation using the actual server clock proving the discount is/isn't applied correctly and is never applied to a combo).
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, review process, and branching model.

@@ -76,6 +76,21 @@ model MenuItem {
   // آیتم بدون این مقدار روی تابلوی آشپزخانه زیر ایستگاه عمومی («عمومی») قرار
   // می‌گیرد.
   kitchenStation String?
+
+  // --- Phase 15: combo meals ---
+  // true یعنی این آیتمِ منو در واقع یک «آیتمِ سایه» است که خودکار برای
+  // نمایندگیِ یک Combo ساخته شده (نک. توضیحِ Combo پایینِ فایل) — نه یک
+  // آیتمِ منویِ واقعی که ادمین مستقیماً فرمول/موجودی برایش تعریف کند.
+  // فرمولِ مصرفِ موادِ اولیه‌ی آن از ترکیبِ اجزای Combo (ComboItem) محاسبه
+  // می‌شود، نه از RecipeItem خودش (که برای این آیتم هرگز پر نمی‌شود).
+  isCombo Boolean @default(false)
+  // رابطه‌ی معکوسِ Combo.menuItemId (یک‌به‌یک).
+  combo   Combo?
+
+  // --- Phase 15: happy hour ---
+  happyHourRuleLinks  HappyHourRuleItem[]
+  comboComponentLinks ComboItem[]
+  comboComponentSnapshots OrderItemComboComponent[]
 }
 
 model Order {
@@ -185,6 +200,25 @@ model OrderItem {
   // quantity برابر باشد.
   refundedQuantity Int          @default(0)
   refundItems      RefundItem[]
+
+  // --- Phase 15: happy hour ---
+  // عکسِ لحظه‌ایِ قانونِ Happy Hour (اگر در لحظه‌ی ثبتِ سفارش روی این آیتم
+  // فعال بوده): priceAtTime از قبل شاملِ این تخفیف است (روی قیمتِ پایه،
+  // پیش از افزودنِ مدیفایرها)؛ این فیلدها فقط برای شفافیت/گزارش نگه داشته
+  // می‌شوند و در محاسبه‌ی totalAmount دوباره دخیل نیستند. نامِ قانون هم
+  // جداگانه ذخیره می‌شود (مثلِ الگویِ OrderItemModifier.modifierName) تا
+  // اگر قانون بعداً ویرایش/حذف شود، تاریخچه دست‌نخورده بماند.
+  happyHourRuleId          String?
+  happyHourRule            HappyHourRule? @relation(fields: [happyHourRuleId], references: [id], onDelete: SetNull)
+  happyHourRuleName        String?
+  happyHourDiscountPerUnit Float          @default(0)
+
+  // --- Phase 15: combo meals ---
+  // عکسِ لحظه‌ایِ اجزای Combo در لحظه‌ی سفارش (فقط وقتی menuItemId به یک
+  // آیتمِ combo اشاره کند) — صرفاً برای شفافیت/گزارشِ آینده؛ محاسبه‌ی
+  // مصرفِ مواد اولیه از OrderItemIngredientUsage (که هنگامِ ثبتِ سفارش با
+  // بسطِ همین اجزا محاسبه شده) انجام می‌شود، نه از این جدول.
+  comboComponents OrderItemComboComponent[]
 }
 
 // از فاز ۵ (چند شعبه‌ای) به بعد، InventoryItem فقط «کاتالوگ» مشترک بین همه‌ی
@@ -1263,4 +1297,121 @@ model Coupon {
   createdAt       DateTime           @default(now())
 
   orders Order[]
+}
+
+// =====================================================================
+// فاز ۱۵: کمبو و قیمت‌گذاری زمان‌بندی‌شده (Combo Meals & Happy Hour)
+// =====================================================================
+// هر دو زیرامکان با هم و فقط برای ADMIN مدیریت می‌شوند (تصمیمِ محدوده‌ی
+// تأییدشده، هم‌سو با مدلِ دسترسیِ فازهای ۱۳/۱۴).
+//
+// تصمیم‌های محدوده‌ی مشخص (اعلام‌شده در گزارشِ پایانیِ این فاز):
+// - هر Combo داخلاً با یک «آیتمِ منویِ سایه» (MenuItem.isCombo=true)
+//   نمایندگی می‌شود که نام/قیمت/دسته‌بندی/ایستگاهِ آشپزخانه/در‌دسترس‌بودنش
+//   از خودِ Combo همگام می‌شود. این یعنی سبدِ خرید، صندوق، منویِ آنلاین،
+//   تابلویِ آشپزخانه، رسید، مرجوعی و آنالیزِ فروش همگی بدونِ هیچ تغییرِ
+//   کدی یک Combo را دقیقاً مثلِ یک آیتمِ منویِ معمولی می‌بینند — تنها
+//   محلِ ویژه‌ای که Combo را می‌شناسد، بسطِ فرمولِ مصرفِ موادِ اولیه است
+//   (نک. recipeExpansion.ts) که مصرفِ آن را از رویِ اجزای Combo (نه یک
+//   RecipeItem مستقیم) محاسبه می‌کند.
+// - یک Combo نمی‌تواند شاملِ Combo دیگری باشد (اعمال‌شده در سطحِ اکشنِ
+//   سرور) — صرفاً برای جلوگیری از پیچیدگی/حلقه‌ی غیرضروری.
+// - Combo از مدیفایر/افزودنی پشتیبانی نمی‌کند در این فاز — آیتمِ سایه‌ی
+//   آن هرگز به یک ModifierGroup متصل نمی‌شود.
+// - تخفیفِ Happy Hour فقط رویِ آیتم‌های منویِ معمولی اعمال می‌شود، نه رویِ
+//   Comboها — یک Combo از پیش قیمتِ بسته‌ی خودش را دارد.
+// - اگر چند قانونِ Happy Hourِ فعال هم‌زمان روی یک آیتم منطبق باشند،
+//   قانونی که بیش‌ترین تخفیف را می‌دهد اعمال می‌شود (همیشه به نفعِ
+//   مشتری) — رابطِ کاربریِ مدیریت، هم‌پوشانیِ بازه‌ی زمانی/روزها را در
+//   لحظه‌ی ذخیره بررسی/مسدود نمی‌کند (این بررسی خارج از محدوده‌ی این
+//   فاز است).
+// - محاسبه‌ی «زمانِ فعلی» بر مبنای زمانِ سرور است، دقیقاً مثلِ سایرِ
+//   بخش‌های این کدبیس (مثلاً createdAt رزروها/لاگ ممیزی) — نه یک منطقه‌ی
+//   زمانیِ صریحاً تنظیم‌شده برای رستوران.
+// - برگردانِ اجزای هر Combo هنگامِ سفارش (OrderItemComboComponent) فقط
+//   برای شفافیت/گزارشِ آینده ذخیره می‌شود؛ رسید و تابلوی آشپزخانه در این
+//   فاز هنوز آن را نمایش نمی‌دهند (دقیقاً مثلِ هر آیتمِ منویِ دیگر، فقط
+//   نامِ خودِ Combo چاپ/نمایش داده می‌شود).
+
+model Combo {
+  id              String   @id @default(uuid())
+  name            String
+  price           Float
+  isActive        Boolean  @default(true)
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  // آیتمِ منویِ سایه‌ای که این Combo را در سراسرِ سیستم نمایندگی می‌کند
+  // (نک. توضیحِ بالا).
+  menuItemId String   @unique
+  menuItem   MenuItem @relation(fields: [menuItemId], references: [id])
+
+  items ComboItem[]
+}
+
+// یکی از اجزای یک Combo — کدام آیتمِ منو، به چه تعداد.
+model ComboItem {
+  id         String @id @default(uuid())
+  comboId    String
+  menuItemId String
+  quantity   Int    @default(1)
+
+  combo    Combo    @relation(fields: [comboId], references: [id], onDelete: Cascade)
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id])
+
+  @@unique([comboId, menuItemId])
+}
+
+// عکسِ لحظه‌ایِ اجزای یک Combo روی یک ردیفِ سفارشِ واقعی، در لحظه‌ی ثبتِ
+// سفارش (دقیقاً همان الگویِ OrderItemModifier) — تا اگر ترکیبِ Combo
+// بعداً تغییر کند، تاریخچه‌ی سفارش‌های قبلی دست‌نخورده بماند.
+model OrderItemComboComponent {
+  id            String @id @default(uuid())
+  orderItemId   String
+  menuItemId    String?
+  menuItemTitle String
+  quantity      Int
+
+  orderItem OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  menuItem  MenuItem? @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
+}
+
+enum HappyHourDiscountType {
+  PERCENT
+  FIXED
+}
+
+// یک قانونِ تخفیفِ زمان‌بندی‌شده (Happy Hour): درصد یا مبلغِ ثابت، روی
+// یک یا چند آیتمِ منویِ معمولی، در بازه‌ی زمانیِ startMinute..endMinute
+// (دقیقه از نیمه‌شب — مثلاً ۱۰۲۰ یعنی ۱۷:۰۰) از روزهایِ هفته‌ی مشخص‌شده
+// در daysOfWeek (۰=یکشنبه هماهنگ با Date.getDay() جاوااسکریپت، یعنی
+// ۰=Sunday..6=Saturday — نه تقویمِ هفته‌ی ایرانی). بازه‌ای که endMinute
+// از startMinute کوچک‌تر باشد، به‌عنوانِ بازه‌ای که از نیمه‌شب عبور
+// می‌کند تفسیر می‌شود (مثلاً ۲۳:۰۰ تا ۰۱:۰۰).
+model HappyHourRule {
+  id              String                @id @default(uuid())
+  name            String
+  discountType    HappyHourDiscountType
+  value           Float
+  daysOfWeek      Int[]
+  startMinute     Int
+  endMinute       Int
+  isActive        Boolean               @default(true)
+  createdByUserId String?
+  createdAt       DateTime              @default(now())
+
+  items      HappyHourRuleItem[]
+  orderItems OrderItem[]
+}
+
+// اتصالِ یک قانونِ Happy Hour به یک آیتمِ منویِ مشخص.
+model HappyHourRuleItem {
+  id         String @id @default(uuid())
+  ruleId     String
+  menuItemId String
+
+  rule     HappyHourRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  menuItem MenuItem      @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+
+  @@unique([ruleId, menuItemId])
 }

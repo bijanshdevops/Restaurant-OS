@@ -49,6 +49,10 @@ export default function POSPage() {
   const [customers, setCustomers] = useState<any[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
 
+  // --- فاز ۱۴: کد تخفیف و کارت هدیه (اختیاری، در لحظه‌ی تسویه) ---
+  const [couponCodeInput, setCouponCodeInput] = useState('');
+  const [giftCardCodeInput, setGiftCardCodeInput] = useState('');
+
   useEffect(() => {
     fetchMenu();
     fetchPrinters();
@@ -123,11 +127,19 @@ export default function POSPage() {
         quantity: c.quantity,
       }));
 
-      const res = await createOrder(payload, selectedCustomerId || undefined);
+      const res = await createOrder(
+        payload,
+        selectedCustomerId || undefined,
+        undefined,
+        couponCodeInput.trim() || undefined,
+        giftCardCodeInput.trim() || undefined
+      );
       
       if (res.success && res.order) {
         setCart([]);
         setSelectedCustomerId('');
+        setCouponCodeInput('');
+        setGiftCardCodeInput('');
         fetchCustomers();
         setLastOrderMessage(`سفارش ${res.order.orderNumber} با موفقیت ثبت شد! مبلغ کل: ${formatCurrency(res.order.totalAmount)}`);
         
@@ -315,6 +327,31 @@ export default function POSPage() {
                 <option key={c.id} value={c.id}>{c.fullName} ({c.phone})</option>
               ))}
             </select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="block text-xs font-bold text-gray-500 mb-1">کد تخفیف (اختیاری)</label>
+              <input
+                type="text"
+                value={couponCodeInput}
+                onChange={(e) => setCouponCodeInput(e.target.value.toUpperCase())}
+                placeholder="مثلاً WELCOME10"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-left focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
+                dir="ltr"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-gray-500 mb-1">کارت هدیه (اختیاری)</label>
+              <input
+                type="text"
+                value={giftCardCodeInput}
+                onChange={(e) => setGiftCardCodeInput(e.target.value.toUpperCase())}
+                placeholder="مثلاً GC-A1B2C3"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-left focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
+                dir="ltr"
+              />
+            </div>
           </div>
 
           <div className="space-y-1.5 text-sm border-t border-gray-200 pt-3">

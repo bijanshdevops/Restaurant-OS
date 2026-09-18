@@ -9,6 +9,8 @@ import { awardLoyaltyForOrder, pointsForAmount } from '@/lib/loyalty';
 import { getDefaultBranchId } from './branch';
 import { SYSTEM_CATEGORY_IDS } from '@/lib/accountingCategories';
 import { computeIngredientUsagePerUnit } from '@/lib/recipeExpansion';
+import { applyCouponWithinTx } from './coupon';
+import { applyGiftCardWithinTx } from './giftCard';
 
 interface CartItem {
   menuItemId: string;
@@ -189,7 +191,13 @@ async function createOrderItemsWithSnapshots(
   return totalStockDeductions;
 }
 
-export async function createOrder(cartItems: CartItem[], customerId?: string, branchId?: string) {
+export async function createOrder(
+  cartItems: CartItem[],
+  customerId?: string,
+  branchId?: string,
+  couponCode?: string,
+  giftCardCode?: string
+) {
   const auth = await requireRole('ADMIN', 'CASHIER');
   if (!auth.ok) return { success: false, error: auth.error };
 
@@ -214,9 +222,35 @@ export async function createOrder(cartItems: CartItem[], customerId?: string, br
       // from the database here, never from the client, so a tampered request
       // can't zero these out either.
       const settings = await tx.restaurantSettings.findUnique({ where: { id: 'default' } });
+      // مالیات همیشه روی subtotalِ ناخالص (قبل از کدِ تخفیف) محاسبه می‌شود —
+      // نک. توضیحِ تصمیمِ محدوده در schema.prisma بالای بخشِ فازِ ۱۴.
       const taxAmount = settings ? Math.round((subtotal * settings.taxPercentage) / 100) : 0;
       const packagingCost = settings?.packagingCost ?? 0;
-      const totalAmount = subtotal + taxAmount + packagingCost;
+
+      // --- فاز ۱۴: کد تخفیف (اختیاری) ---
+      let couponId: string | null = null;
+      let couponCodeSnapshot: string | null = null;
+      let discountAmount = 0;
+      if (couponCode?.trim()) {
+        const applied = await applyCouponWithinTx(tx, couponCode, subtotal);
+        couponId = applied.couponId;
+        couponCodeSnapshot = applied.couponCode;
+        discountAmount = applied.discountAmount;
+      }
+
+      const preGiftCardTotal = Math.max(0, subtotal - discountAmount + taxAmount + packagingCost);
+
+      // --- فاز ۱۴: کارت هدیه (اختیاری) — به‌عنوانِ آخرین لایه، مثلِ یک
+      // روشِ پرداختِ جزئی، بعد از اعمالِ کدِ تخفیف کسر می‌شود.
+      let giftCardId: string | null = null;
+      let giftCardAmountUsed = 0;
+      if (giftCardCode?.trim()) {
+        const applied = await applyGiftCardWithinTx(tx, giftCardCode, preGiftCardTotal);
+        giftCardId = applied.giftCardId;
+        giftCardAmountUsed = applied.amountUsed;
+      }
+
+      const totalAmount = preGiftCardTotal - giftCardAmountUsed;
 
       // --- Phase 10: refunds & returns ---
       // Order.pointsEarned تا پیش از این فقط توسط جریان سفارش آنلاین
@@ -241,8 +275,28 @@ export async function createOrder(cartItems: CartItem[], customerId?: string, br
           status: 'PENDING',
           customerId: customerId || null,
           branchId: effectiveBranchId,
+          couponId,
+          couponCode: couponCodeSnapshot,
+          discountAmount,
+          giftCardId,
+          giftCardAmountUsed,
         },
       });
+
+      // فاز ۱۴: ثبتِ تراکنشِ استفاده از کارتِ هدیه (اگر بود) — حالا که
+      // order.id در دسترس است.
+      if (giftCardId && giftCardAmountUsed > 0) {
+        const giftCard = await tx.giftCard.findUniqueOrThrow({ where: { id: giftCardId } });
+        await tx.giftCardTransaction.create({
+          data: {
+            giftCardId,
+            orderId: order.id,
+            type: 'REDEEM',
+            amount: giftCardAmountUsed,
+            balanceAfter: giftCard.currentBalance,
+          },
+        });
+      }
 
       // 3. Create the associated order items (with the server-verified price
       // and selected modifiers), and snapshot each one's ingredient usage
@@ -365,7 +419,9 @@ export async function updateOrderStatus(orderId: string, status: OrderStatus) {
 export async function createOnlineOrder(
   cartItems: CartItem[],
   deliveryAddress: string,
-  pointsToRedeem: number = 0
+  pointsToRedeem: number = 0,
+  couponCode?: string,
+  giftCardCode?: string
 ) {
   const auth = await requireCustomer();
   if (!auth.ok) return { success: false, error: auth.error };
@@ -397,14 +453,38 @@ export async function createOnlineOrder(
 
       const preDiscountTotal = subtotal + taxAmount + packagingCost + deliveryFee;
 
+      // --- فاز ۱۴: کد تخفیف (اختیاری) — درصد/مبلغِ ثابت روی subtotalِ
+      // ناخالص محاسبه می‌شود (نک. توضیحِ تصمیمِ محدوده در schema.prisma).
+      let couponId: string | null = null;
+      let couponCodeSnapshot: string | null = null;
+      let discountAmount = 0;
+      if (couponCode?.trim()) {
+        const applied = await applyCouponWithinTx(tx, couponCode, subtotal);
+        couponId = applied.couponId;
+        couponCodeSnapshot = applied.couponCode;
+        discountAmount = applied.discountAmount;
+      }
+      const afterCoupon = Math.max(0, preDiscountTotal - discountAmount);
+
       // Never let a customer redeem more points than they actually have, and
       // never let the discount take the order below zero — both are enforced
       // server-side regardless of what the client asked for.
       const maxRedeemableByBalance = Math.max(0, customer.pointsBalance);
-      const maxRedeemableByOrderValue = Math.floor(preDiscountTotal / Math.max(pointValue, 1));
+      const maxRedeemableByOrderValue = Math.floor(afterCoupon / Math.max(pointValue, 1));
       const pointsRedeemed = Math.min(redeemRequested, maxRedeemableByBalance, maxRedeemableByOrderValue);
-      const discount = pointsRedeemed * pointValue;
-      const totalAmount = Math.max(0, preDiscountTotal - discount);
+      const pointsDiscount = pointsRedeemed * pointValue;
+      const preGiftCardTotal = Math.max(0, afterCoupon - pointsDiscount);
+
+      // --- فاز ۱۴: کارت هدیه (اختیاری) — آخرین لایه، بعد از کدِ تخفیف و
+      // تخفیفِ امتیازِ وفاداری.
+      let giftCardId: string | null = null;
+      let giftCardAmountUsed = 0;
+      if (giftCardCode?.trim()) {
+        const applied = await applyGiftCardWithinTx(tx, giftCardCode, preGiftCardTotal);
+        giftCardId = applied.giftCardId;
+        giftCardAmountUsed = applied.amountUsed;
+      }
+      const totalAmount = preGiftCardTotal - giftCardAmountUsed;
 
       const order = await tx.order.create({
         data: {
@@ -417,8 +497,27 @@ export async function createOnlineOrder(
           deliveryAddress: deliveryAddress.trim(),
           deliveryFee,
           pointsRedeemed,
+          couponId,
+          couponCode: couponCodeSnapshot,
+          discountAmount,
+          giftCardId,
+          giftCardAmountUsed,
         },
       });
+
+      // فاز ۱۴: ثبتِ تراکنشِ استفاده از کارتِ هدیه (اگر بود).
+      if (giftCardId && giftCardAmountUsed > 0) {
+        const giftCard = await tx.giftCard.findUniqueOrThrow({ where: { id: giftCardId } });
+        await tx.giftCardTransaction.create({
+          data: {
+            giftCardId,
+            orderId: order.id,
+            type: 'REDEEM',
+            amount: giftCardAmountUsed,
+            balanceAfter: giftCard.currentBalance,
+          },
+        });
+      }
 
       // مصرفِ موادِ اولیه (فاز ۱۳) همین‌جا، در لحظه‌ی ثبتِ سفارش، محاسبه و
       // به‌صورتِ عکسِ لحظه‌ای ذخیره می‌شود — کسرِ واقعیِ موجودی اما تا زمانِ

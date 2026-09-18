@@ -122,6 +122,20 @@ model Order {
 
   // --- Phase 10: refunds & returns ---
   refunds Refund[]
+
+  // --- Phase 14: gift cards & discount coupons ---
+  // اسنپ‌شاتِ کدِ تخفیفِ اعمال‌شده (اگر بود) + مبلغِ کسرشده، مستقل از
+  // این‌که بعداً خودِ Coupon تغییر کند یا حذف شود.
+  couponId       String?
+  coupon         Coupon? @relation(fields: [couponId], references: [id])
+  couponCode     String?
+  discountAmount Float   @default(0)
+
+  giftCardId         String?
+  giftCard           GiftCard? @relation(fields: [giftCardId], references: [id])
+  giftCardAmountUsed Float     @default(0)
+
+  giftCardTransactions GiftCardTransaction[]
 }
 
 enum OrderStatus {
@@ -271,6 +285,9 @@ model Customer {
 
   // جلوگیری از اعطای دوبارهٔ پاداش معرفی: فقط یک‌بار، در اولین سفارش این مشتری.
   referralRewardGranted Boolean @default(false)
+
+  // --- Phase 14: gift cards ---
+  giftCards GiftCard[]
 }
 
 model OtpCode {
@@ -1160,4 +1177,90 @@ model OrderItemIngredientUsage {
   inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
 
   @@unique([orderItemId, inventoryItemId])
+}
+
+// =====================================================================
+// فاز ۱۴: کارت هدیه و کد تخفیف (Gift Cards & Discount Coupons)
+// =====================================================================
+// هر دو زیرامکان با هم و فقط برای ADMIN مدیریت می‌شوند (مطابق تصمیمِ
+// محدوده‌ی تأییدشده، هم‌سو با مدل دسترسیِ فرمول/BOM در فازِ ۱۳).
+//
+// تصمیم‌های محدوده‌ی مشخص (اعلام‌شده به کاربر در گزارش پایانی این فاز):
+// - صدورِ کارتِ هدیه هیچ تراکنشِ حسابداری‌ای ثبت نمی‌کند (فرض بر این است
+//   که یا هدیه/جبرانی است یا وجهش جای دیگری حساب شده)؛ فقط استفاده از آن
+//   در سفارش، مبلغِ نهاییِ سفارش (و به‌تبع، تراکنشِ درآمدِ همان سفارش) را
+//   کم می‌کند — دقیقاً مثل کد تخفیف که خودش هم تراکنشی نمی‌سازد.
+// - مالیات روی «مبلغِ ناخالصِ اقلام» (subtotal) قبل از اعمالِ کدِ تخفیف
+//   محاسبه می‌شود — هم‌سو با رفتارِ از پیش موجودِ فازِ ۲ که مالیات را قبل
+//   از تخفیفِ امتیازِ وفاداری محاسبه می‌کند؛ یک مبنای مالیاتیِ واحد برای
+//   کل سیستم، نه قاعده‌ی جداگانه برای هر نوع تخفیف.
+// - کارتِ هدیه به‌عنوانِ آخرین لایه، بعد از کدِ تخفیف و (در سفارش آنلاین)
+//   بعد از تخفیفِ امتیازِ وفاداری اعمال می‌شود — مثلِ یک روشِ پرداختِ
+//   جزئی، نه یک تخفیفِ قیمتی.
+// - مرجوعی (refund.ts) کاملاً دست‌نخورده می‌ماند: مبلغِ مرجوعی همچنان فقط
+//   از رویِ قیمتِ ردیف‌های سفارش/مالیات محاسبه می‌شود، بدونِ درنظرگرفتنِ
+//   این‌که سفارش با کدِ تخفیف/کارتِ هدیه پرداخت شده بود یا نه؛ استفاده از
+//   کارتِ هدیه/کدِ تخفیف در یک سفارش به‌طورِ خودکار در مرجوعیِ آن سفارش
+//   برگردانده نمی‌شود (نه افزایشِ مجددِ موجودیِ کارت، نه کاهشِ شمارشِ
+//   استفاده‌ی کد) — خارج از محدوده‌ی این فاز؛ جبرانِ مشتری پس از مرجوعی
+//   (در صورتِ نیاز) با صدورِ دستیِ یک کارتِ هدیه‌ی جدید توسط ADMIN انجام
+//   می‌شود.
+
+enum GiftCardTransactionType {
+  ISSUE
+  REDEEM
+}
+
+model GiftCard {
+  id              String    @id @default(uuid())
+  code            String    @unique
+  initialBalance  Float
+  currentBalance  Float
+  isActive        Boolean   @default(true)
+  expiresAt       DateTime?
+  note            String?
+  createdByUserId String?
+  createdAt       DateTime  @default(now())
+
+  issuedToCustomerId String?
+  issuedToCustomer   Customer? @relation(fields: [issuedToCustomerId], references: [id])
+
+  transactions GiftCardTransaction[]
+  orders       Order[]
+}
+
+// دفترچه‌ی تراکنش‌های هر کارتِ هدیه (صدور، استفاده) — برای شفافیت و
+// قابلیتِ ردیابیِ کاملِ تغییراتِ موجودیِ کارت.
+model GiftCardTransaction {
+  id           String                  @id @default(uuid())
+  giftCardId   String
+  giftCard     GiftCard                @relation(fields: [giftCardId], references: [id], onDelete: Cascade)
+  orderId      String?
+  order        Order?                  @relation(fields: [orderId], references: [id])
+  type         GiftCardTransactionType
+  amount       Float
+  balanceAfter Float
+  createdAt    DateTime                @default(now())
+}
+
+enum CouponDiscountType {
+  PERCENT
+  FIXED
+}
+
+model Coupon {
+  id              String             @id @default(uuid())
+  code            String             @unique
+  discountType    CouponDiscountType
+  value           Float
+  minOrderAmount  Float              @default(0)
+  // null = بدونِ سقفِ تعدادِ استفاده در کلِ سیستم.
+  maxUses         Int?
+  usesCount       Int                @default(0)
+  expiresAt       DateTime?
+  isActive        Boolean            @default(true)
+  createdByUserId String?
+  createdAt       DateTime           @default(now())
+
+  orders Order[]
 }

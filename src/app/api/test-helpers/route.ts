@@ -100,6 +100,14 @@ import {
 import { getSalesAnalytics } from '@/app/actions/analytics';
 import { findOrderForRefund, createRefund, getRefunds } from '@/app/actions/refund';
 import { getAuditLogs, getAuditActionList } from '@/app/actions/auditLog';
+import {
+  getGiftCards,
+  issueGiftCard,
+  deactivateGiftCard,
+  getGiftCardTransactions,
+  checkGiftCardBalance,
+} from '@/app/actions/giftCard';
+import { getCoupons, createCoupon, updateCoupon, deleteCoupon, checkCouponForOrder } from '@/app/actions/coupon';
 
 /**
  * دروازه‌ی کمکی مخصوص تست‌های خودکار (Vitest / CI).
@@ -241,6 +249,16 @@ const actions: Record<string, (...args: any[]) => Promise<any>> = {
   getRefunds,
   getAuditLogs,
   getAuditActionList,
+  getGiftCards,
+  issueGiftCard,
+  deactivateGiftCard,
+  getGiftCardTransactions,
+  checkGiftCardBalance,
+  getCoupons,
+  createCoupon,
+  updateCoupon,
+  deleteCoupon,
+  checkCouponForOrder,
 };
 
 function guard() {

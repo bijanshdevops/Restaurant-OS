@@ -463,6 +463,36 @@ Covered end-to-end by `tests/preciseRecipe.test.ts` (access control, yield %, su
 
 ---
 
+## Gift Cards & Discount Coupons (Phase 14)
+
+Both sub-features the user asked for shipped together in this phase, with management access scoped to **`ADMIN`-only** — the same access model as Phase 13's recipe/BOM screen. The live balance/discount preview actions used by the online checkout page (`checkGiftCardBalance`, `checkCouponForOrder`) are the one deliberate exception: they need no authentication at all, since a not-yet-logged-in customer must be able to check a code before placing an order.
+
+### Gift cards
+
+A new `GiftCard` model: a unique code, an `initialBalance` set once at issuance, a `currentBalance` that only ever moves downward as the card is redeemed, an optional expiry date, an optional note, and an optional link to the `Customer` it was issued to. Every change in balance is mirrored as a `GiftCardTransaction` row (`ISSUE` or `REDEEM`, each carrying the resulting `balanceAfter`) — a full, append-only ledger per card, not just a running number. `issueGiftCard`/`deactivateGiftCard` are `ADMIN`-only; `checkGiftCardBalance` is the public, non-mutating preview used to show a customer their balance before checkout.
+
+### Discount coupons
+
+A new `Coupon` model: a unique code, `PERCENT` (1–100) or `FIXED` discount, an optional `minOrderAmount`, an optional `maxUses` (unlimited when left blank) with a tracked `usesCount`, an optional expiry, and an `isActive` toggle. A `FIXED` discount larger than the order's subtotal is clamped to the subtotal rather than pushing the order negative. Deleting a coupon that has never been used removes it outright; deleting one that has already been used on at least one order deactivates it instead (`deactivatedInstead: true` in the response) so historical orders keep an intact, resolvable `couponCode` reference.
+
+### Applying a code at checkout — and the layering order
+
+Both `createOrder` (POS) and `createOnlineOrder` (online) accept an optional coupon code and/or gift card code, and apply them **inside the same database transaction that creates the order**. An invalid, expired, exhausted, deactivated, or unknown code throws and rolls back the *entire* order — a bad code fails loudly rather than being silently ignored, so a cashier or customer always knows immediately if a code didn't work. The order records exactly what happened at that moment (`couponCode`, `discountAmount`, `giftCardAmountUsed`, and a `GiftCardTransaction` of type `REDEEM`), so later changes to the coupon or gift card never retroactively change a past order's numbers — the same "snapshot what actually happened" pattern Phase 13 established for recipe usage.
+
+The calculation order, applied identically in both POS and online checkout, is: gross `subtotal` → tax computed on that gross subtotal (unchanged from the app's original tax logic) → coupon discount subtracted → loyalty-points discount subtracted (online orders only, computed on the *post-coupon* amount) → gift card applied last, as a final layer capped at whatever remains due, never producing a negative total.
+
+### Known scope decisions (disclosed)
+
+- **Tax is computed on the gross subtotal, before any discount** — consistent with how tax was already computed before this phase, not a new policy invented here. A coupon or gift card reduces what the customer owes, not the taxable base.
+- **No accounting transaction is created when a gift card is issued.** Issuing a card is treated as pre-selling store credit, not as revenue at issuance time; the existing accounting model only records income when the card is later redeemed on an order (the normal order-income transaction, unchanged).
+- **A refund does not restore gift-card balance or decrement a coupon's `usesCount`.** Refunding an order (`refund.ts`) was intentionally left untouched — reversing consumed store credit or use-counts on refund was out of scope for this phase. `tests/giftCardsCoupons.test.ts` has a dedicated test proving both stay exactly as they were after a full refund.
+- **No customer-picker in the admin gift-card issuance UI.** A card can be issued generically (redeemable by whoever has the code) or linked to a customer at the data-model level, but the admin screen shipped in this phase only exposes the generic issuance flow.
+- **An invalid code fails the whole order, not just the discount.** This was a deliberate choice over silently dropping an unrecognized code and still completing the order at full price.
+
+Covered end-to-end by `tests/giftCardsCoupons.test.ts` (access control including the unauthenticated preview actions, gift-card issuance and validation, coupon-creation validation, coupon application including percent/fixed math and minOrderAmount/maxUses/expiry/deactivation rejections, gift-card redemption including partial- and full-drain math and zero-balance/deactivated rejections, the combined coupon+gift-card layering formula, the refund-non-reversal test, and coupon deletion's hard-delete-vs-deactivate behavior).
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, review process, and branching model.

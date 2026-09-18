@@ -7,6 +7,8 @@ import { getPublicOrderSettings } from '@/app/actions/settings';
 import { getCustomerProfile } from '@/app/actions/customerAuth';
 import { createOnlineOrder } from '@/app/actions/order';
 import { initiatePayment } from '@/app/actions/payment';
+import { checkCouponForOrder } from '@/app/actions/coupon';
+import { checkGiftCardBalance } from '@/app/actions/giftCard';
 import { formatCurrency, toPersianDigits } from '@/shared/utils/formatters';
 
 const PAYMENT_ERROR_MESSAGES: Record<string, string> = {
@@ -35,6 +37,14 @@ export default function CheckoutPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
 
+  // --- فاز ۱۴: کد تخفیف و کارت هدیه (اختیاری) ---
+  const [couponCodeInput, setCouponCodeInput] = useState('');
+  const [couponPreview, setCouponPreview] = useState<{ amount: number; error?: string } | null>(null);
+  const [isCheckingCoupon, setIsCheckingCoupon] = useState(false);
+  const [giftCardCodeInput, setGiftCardCodeInput] = useState('');
+  const [giftCardPreview, setGiftCardPreview] = useState<{ balance: number; error?: string } | null>(null);
+  const [isCheckingGiftCard, setIsCheckingGiftCard] = useState(false);
+
   useEffect(() => {
     getPublicOrderSettings().then((res) => {
       if (res.success && res.settings) setSettings(res.settings);
@@ -56,12 +66,47 @@ export default function CheckoutPage() {
   const pointValue = settings?.loyaltyPointValueToman ?? 1000;
   const preDiscountTotal = subtotal + taxAmount + packagingCost + deliveryFee;
 
-  const maxRedeemable = useMemo(() => {
-    return Math.max(0, Math.min(pointsBalance, Math.floor(preDiscountTotal / Math.max(pointValue, 1))));
-  }, [pointsBalance, preDiscountTotal, pointValue]);
+  const couponDiscount = couponPreview?.amount || 0;
+  const afterCouponTotal = Math.max(0, preDiscountTotal - couponDiscount);
 
-  const discount = pointsToRedeem * pointValue;
-  const total = Math.max(0, preDiscountTotal - discount);
+  const maxRedeemable = useMemo(() => {
+    return Math.max(0, Math.min(pointsBalance, Math.floor(afterCouponTotal / Math.max(pointValue, 1))));
+  }, [pointsBalance, afterCouponTotal, pointValue]);
+
+  const pointsDiscount = pointsToRedeem * pointValue;
+  const preGiftCardTotal = Math.max(0, afterCouponTotal - pointsDiscount);
+  const giftCardUsable = giftCardPreview ? Math.min(giftCardPreview.balance, preGiftCardTotal) : 0;
+  const total = Math.max(0, preGiftCardTotal - giftCardUsable);
+
+  const handleCheckCoupon = async () => {
+    if (!couponCodeInput.trim()) {
+      setCouponPreview(null);
+      return;
+    }
+    setIsCheckingCoupon(true);
+    const res = await checkCouponForOrder(couponCodeInput, subtotal);
+    setIsCheckingCoupon(false);
+    if (res.success) {
+      setCouponPreview({ amount: res.discountAmount! });
+    } else {
+      setCouponPreview({ amount: 0, error: res.error });
+    }
+  };
+
+  const handleCheckGiftCard = async () => {
+    if (!giftCardCodeInput.trim()) {
+      setGiftCardPreview(null);
+      return;
+    }
+    setIsCheckingGiftCard(true);
+    const res = await checkGiftCardBalance(giftCardCodeInput);
+    setIsCheckingGiftCard(false);
+    if (res.success) {
+      setGiftCardPreview({ balance: res.balance! });
+    } else {
+      setGiftCardPreview({ balance: 0, error: res.error });
+    }
+  };
 
   const handlePay = async () => {
     setError('');
@@ -74,7 +119,9 @@ export default function CheckoutPage() {
       const orderRes = await createOnlineOrder(
         lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity })),
         address,
-        pointsToRedeem
+        pointsToRedeem,
+        couponCodeInput.trim() || undefined,
+        giftCardCodeInput.trim() || undefined
       );
       if (!orderRes.success || !orderRes.order) {
         setError(orderRes.error || 'خطا در ثبت سفارش');
@@ -145,6 +192,58 @@ export default function CheckoutPage() {
           />
         </div>
 
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-3">
+          <h2 className="font-bold text-gray-900">کد تخفیف و کارت هدیه (اختیاری)</h2>
+          <div>
+            <label className="block text-xs font-bold text-gray-500 mb-1">کد تخفیف</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={couponCodeInput}
+                onChange={(e) => { setCouponCodeInput(e.target.value.toUpperCase()); setCouponPreview(null); }}
+                placeholder="مثلاً WELCOME10"
+                className="flex-1 px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-left"
+                dir="ltr"
+              />
+              <button
+                onClick={handleCheckCoupon}
+                disabled={isCheckingCoupon || !couponCodeInput.trim()}
+                className="px-4 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-sm font-bold text-gray-700 disabled:opacity-60"
+              >
+                {isCheckingCoupon ? '...' : 'اعمال'}
+              </button>
+            </div>
+            {couponPreview?.error && <p className="text-xs text-red-600 mt-1">{couponPreview.error}</p>}
+            {couponPreview && !couponPreview.error && (
+              <p className="text-xs text-green-600 mt-1 font-bold">تخفیف: − {formatCurrency(couponPreview.amount)}</p>
+            )}
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-gray-500 mb-1">کارت هدیه</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={giftCardCodeInput}
+                onChange={(e) => { setGiftCardCodeInput(e.target.value.toUpperCase()); setGiftCardPreview(null); }}
+                placeholder="مثلاً GC-A1B2C3"
+                className="flex-1 px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-left"
+                dir="ltr"
+              />
+              <button
+                onClick={handleCheckGiftCard}
+                disabled={isCheckingGiftCard || !giftCardCodeInput.trim()}
+                className="px-4 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-sm font-bold text-gray-700 disabled:opacity-60"
+              >
+                {isCheckingGiftCard ? '...' : 'بررسی'}
+              </button>
+            </div>
+            {giftCardPreview?.error && <p className="text-xs text-red-600 mt-1">{giftCardPreview.error}</p>}
+            {giftCardPreview && !giftCardPreview.error && (
+              <p className="text-xs text-green-600 mt-1 font-bold">موجودی قابل استفاده: {formatCurrency(giftCardUsable)}</p>
+            )}
+          </div>
+        </div>
+
         {maxRedeemable > 0 && (
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
             <div className="flex justify-between items-center mb-3">
@@ -163,7 +262,7 @@ export default function CheckoutPage() {
             />
             <div className="flex justify-between text-sm mt-2">
               <span className="text-gray-600">{toPersianDigits(pointsToRedeem)} امتیاز</span>
-              <span className="font-bold text-green-600">− {formatCurrency(discount)}</span>
+              <span className="font-bold text-green-600">− {formatCurrency(pointsDiscount)}</span>
             </div>
           </div>
         )}
@@ -185,10 +284,22 @@ export default function CheckoutPage() {
             <span>هزینه ارسال</span>
             <span>{formatCurrency(deliveryFee)}</span>
           </div>
-          {discount > 0 && (
+          {couponDiscount > 0 && (
+            <div className="flex justify-between text-sm text-green-600 font-bold">
+              <span>تخفیف کد {couponCodeInput}</span>
+              <span>− {formatCurrency(couponDiscount)}</span>
+            </div>
+          )}
+          {pointsDiscount > 0 && (
             <div className="flex justify-between text-sm text-green-600 font-bold">
               <span>تخفیف امتیاز</span>
-              <span>− {formatCurrency(discount)}</span>
+              <span>− {formatCurrency(pointsDiscount)}</span>
+            </div>
+          )}
+          {giftCardUsable > 0 && (
+            <div className="flex justify-between text-sm text-green-600 font-bold">
+              <span>پرداخت با کارت هدیه</span>
+              <span>− {formatCurrency(giftCardUsable)}</span>
             </div>
           )}
           <div className="flex justify-between text-lg font-black text-gray-900 pt-2 border-t border-gray-100">

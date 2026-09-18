@@ -16,7 +16,9 @@ import {
   setMenuItemModifierGroups,
 } from '@/app/actions/modifiers';
 import { getSettings, updateSettings } from '@/app/actions/settings';
-import { Role, PrinterType, PrinterConnectionType } from '@prisma/client';
+import { getGiftCards, issueGiftCard, deactivateGiftCard } from '@/app/actions/giftCard';
+import { getCoupons, createCoupon, updateCoupon, deleteCoupon } from '@/app/actions/coupon';
+import { Role, PrinterType, PrinterConnectionType, CouponDiscountType } from '@prisma/client';
 
 interface MenuItem {
   id: string;
@@ -136,8 +138,35 @@ interface ModifierGroupRow {
   _count: { menuItems: number };
 }
 
+// --- فاز ۱۴: کارت هدیه و کد تخفیف ---
+interface GiftCardRow {
+  id: string;
+  code: string;
+  initialBalance: number;
+  currentBalance: number;
+  isActive: boolean;
+  expiresAt: string | Date | null;
+  note: string | null;
+  issuedToCustomer: { id: string; fullName: string; phone: string } | null;
+  createdAt: string | Date;
+  _count: { orders: number };
+}
+
+interface CouponRow {
+  id: string;
+  code: string;
+  discountType: CouponDiscountType;
+  value: number;
+  minOrderAmount: number;
+  maxUses: number | null;
+  usesCount: number;
+  expiresAt: string | Date | null;
+  isActive: boolean;
+  createdAt: string | Date;
+}
+
 export default function AdminPage() {
-  const [activeTab, setActiveTab] = useState<'menu' | 'settings' | 'users' | 'printers' | 'costing' | 'subrecipes' | 'modifiers'>('menu');
+  const [activeTab, setActiveTab] = useState<'menu' | 'settings' | 'users' | 'printers' | 'costing' | 'subrecipes' | 'modifiers' | 'giftcards' | 'coupons'>('menu');
   
   // --- Menu Management State ---
   const [items, setItems] = useState<MenuItem[]>([]);
@@ -224,6 +253,31 @@ export default function AdminPage() {
   const [modifierGroupModifiers, setModifierGroupModifiers] = useState<ModifierRow[]>([]);
   const [isSavingModifierGroup, setIsSavingModifierGroup] = useState(false);
   const [modifierGroupError, setModifierGroupError] = useState('');
+
+  // --- Gift Cards (فاز ۱۴) State ---
+  const [giftCards, setGiftCards] = useState<GiftCardRow[]>([]);
+  const [isLoadingGiftCards, setIsLoadingGiftCards] = useState(false);
+  const [isGiftCardModalOpen, setIsGiftCardModalOpen] = useState(false);
+  const [giftCardInitialBalance, setGiftCardInitialBalance] = useState(0);
+  const [giftCardCodeInput, setGiftCardCodeInput] = useState('');
+  const [giftCardExpiresAt, setGiftCardExpiresAt] = useState('');
+  const [giftCardNote, setGiftCardNote] = useState('');
+  const [isSavingGiftCard, setIsSavingGiftCard] = useState(false);
+  const [giftCardError, setGiftCardError] = useState('');
+
+  // --- Coupons (فاز ۱۴) State ---
+  const [coupons, setCoupons] = useState<CouponRow[]>([]);
+  const [isLoadingCoupons, setIsLoadingCoupons] = useState(false);
+  const [isCouponModalOpen, setIsCouponModalOpen] = useState(false);
+  const [editingCouponId, setEditingCouponId] = useState<string | null>(null);
+  const [couponCodeInput, setCouponCodeInput] = useState('');
+  const [couponDiscountType, setCouponDiscountType] = useState<CouponDiscountType>('PERCENT');
+  const [couponValue, setCouponValue] = useState(0);
+  const [couponMinOrderAmount, setCouponMinOrderAmount] = useState(0);
+  const [couponMaxUses, setCouponMaxUses] = useState('');
+  const [couponExpiresAt, setCouponExpiresAt] = useState('');
+  const [isSavingCoupon, setIsSavingCoupon] = useState(false);
+  const [couponError, setCouponError] = useState('');
 
   // --- Bulk Import State ---
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
@@ -333,6 +387,18 @@ export default function AdminPage() {
   useEffect(() => {
     if (activeTab === 'modifiers' && modifierGroups.length === 0) {
       fetchModifierGroups();
+    }
+  }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (activeTab === 'giftcards' && giftCards.length === 0) {
+      fetchGiftCards();
+    }
+  }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (activeTab === 'coupons' && coupons.length === 0) {
+      fetchCoupons();
     }
   }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -994,6 +1060,133 @@ export default function AdminPage() {
     }
   };
 
+  // --- Gift Cards (فاز ۱۴) Handlers ---
+  const fetchGiftCards = async () => {
+    setIsLoadingGiftCards(true);
+    const res = await getGiftCards();
+    if (res.success) setGiftCards((res.giftCards || []) as GiftCardRow[]);
+    setIsLoadingGiftCards(false);
+  };
+
+  const openNewGiftCardModal = () => {
+    setGiftCardInitialBalance(0);
+    setGiftCardCodeInput('');
+    setGiftCardExpiresAt('');
+    setGiftCardNote('');
+    setGiftCardError('');
+    setIsGiftCardModalOpen(true);
+  };
+
+  const closeGiftCardModal = () => {
+    setIsGiftCardModalOpen(false);
+  };
+
+  const handleIssueGiftCard = async () => {
+    setIsSavingGiftCard(true);
+    setGiftCardError('');
+    const res = await issueGiftCard({
+      initialBalance: giftCardInitialBalance,
+      code: giftCardCodeInput.trim() || undefined,
+      expiresAt: giftCardExpiresAt || null,
+      note: giftCardNote.trim() || undefined,
+    });
+    setIsSavingGiftCard(false);
+    if (res.success) {
+      closeGiftCardModal();
+      fetchGiftCards();
+    } else {
+      setGiftCardError(res.error || 'خطا در صدور کارت هدیه');
+    }
+  };
+
+  const handleDeactivateGiftCard = async (id: string) => {
+    if (!confirm('آیا از غیرفعال‌سازی این کارت هدیه مطمئن هستید؟ پس از این، دیگر در هیچ سفارشی قابل استفاده نخواهد بود.')) return;
+    const res = await deactivateGiftCard(id);
+    if (res.success) {
+      fetchGiftCards();
+    } else {
+      alert(res.error || 'خطا در غیرفعال‌سازی کارت هدیه');
+    }
+  };
+
+  // --- Coupons (فاز ۱۴) Handlers ---
+  const fetchCoupons = async () => {
+    setIsLoadingCoupons(true);
+    const res = await getCoupons();
+    if (res.success) setCoupons((res.coupons || []) as CouponRow[]);
+    setIsLoadingCoupons(false);
+  };
+
+  const openNewCouponModal = () => {
+    setEditingCouponId(null);
+    setCouponCodeInput('');
+    setCouponDiscountType('PERCENT');
+    setCouponValue(0);
+    setCouponMinOrderAmount(0);
+    setCouponMaxUses('');
+    setCouponExpiresAt('');
+    setCouponError('');
+    setIsCouponModalOpen(true);
+  };
+
+  const openEditCouponModal = (c: CouponRow) => {
+    setEditingCouponId(c.id);
+    setCouponCodeInput(c.code);
+    setCouponDiscountType(c.discountType);
+    setCouponValue(c.value);
+    setCouponMinOrderAmount(c.minOrderAmount);
+    setCouponMaxUses(c.maxUses != null ? String(c.maxUses) : '');
+    setCouponExpiresAt(c.expiresAt ? new Date(c.expiresAt).toISOString().slice(0, 10) : '');
+    setCouponError('');
+    setIsCouponModalOpen(true);
+  };
+
+  const closeCouponModal = () => {
+    setIsCouponModalOpen(false);
+    setEditingCouponId(null);
+  };
+
+  const handleSaveCoupon = async () => {
+    setIsSavingCoupon(true);
+    setCouponError('');
+    const input = {
+      code: couponCodeInput,
+      discountType: couponDiscountType,
+      value: couponValue,
+      minOrderAmount: couponMinOrderAmount,
+      maxUses: couponMaxUses.trim() ? parseInt(couponMaxUses, 10) : null,
+      expiresAt: couponExpiresAt || null,
+    };
+    const res = editingCouponId
+      ? await updateCoupon(editingCouponId, input)
+      : await createCoupon(input);
+    setIsSavingCoupon(false);
+    if (res.success) {
+      closeCouponModal();
+      fetchCoupons();
+    } else {
+      setCouponError(res.error || 'خطا در ذخیره‌ی کد تخفیف');
+    }
+  };
+
+  const handleDeleteCoupon = async (id: string) => {
+    if (!confirm('آیا از حذف این کد تخفیف مطمئن هستید؟')) return;
+    const res = await deleteCoupon(id);
+    if (res.success) {
+      if ((res as any).deactivatedInstead) {
+        alert('این کد قبلاً در سفارشی استفاده شده بود، پس به‌جای حذف، فقط غیرفعال شد.');
+      }
+      fetchCoupons();
+    } else {
+      alert(res.error || 'خطا در حذف کد تخفیف');
+    }
+  };
+
+  const handleToggleCouponActive = async (c: CouponRow) => {
+    const res = await updateCoupon(c.id, { isActive: !c.isActive });
+    if (res.success) fetchCoupons();
+  };
+
   return (
     <div className="space-y-6">
       {/* Top Header & Tab Navigation */}
@@ -1062,6 +1255,26 @@ export default function AdminPage() {
               }`}
             >
               ➕ مدیفایرها
+            </button>
+            <button
+              onClick={() => setActiveTab('giftcards')}
+              className={`px-6 py-3 font-bold text-sm transition-colors border-b-2 -mb-px ${
+                activeTab === 'giftcards'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              🎁 کارت‌های هدیه
+            </button>
+            <button
+              onClick={() => setActiveTab('coupons')}
+              className={`px-6 py-3 font-bold text-sm transition-colors border-b-2 -mb-px ${
+                activeTab === 'coupons'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              🏷️ کدهای تخفیف
             </button>
             <button
               onClick={() => setActiveTab('settings')}
@@ -1649,6 +1862,153 @@ export default function AdminPage() {
         </div>
       )}
 
+      {/* -------------------- GIFT CARDS TAB (فاز ۱۴) -------------------- */}
+      {activeTab === 'giftcards' && (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-300">
+          <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+            <div>
+              <h2 className="text-lg font-bold text-gray-800">کارت‌های هدیه</h2>
+              <p className="text-xs text-gray-500 mt-0.5">صدور کارت هدیه با کدِ یکتا و موجودیِ اولیه — قابل استفاده در تسویه‌ی سفارش (POS و آنلاین)</p>
+            </div>
+            <button
+              onClick={openNewGiftCardModal}
+              className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition-all shadow-sm hover:shadow flex items-center gap-2 text-sm"
+            >
+              ➕ صدور کارت هدیه جدید
+            </button>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+            {isLoadingGiftCards ? (
+              <div className="text-center text-gray-500 text-sm py-10 animate-pulse">درحال بارگذاری...</div>
+            ) : giftCards.length === 0 ? (
+              <div className="text-center text-gray-400 text-sm py-10">هنوز کارت هدیه‌ای صادر نشده است.</div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-gray-500 text-xs">
+                  <tr>
+                    <th className="px-6 py-3 text-right font-bold">کد</th>
+                    <th className="px-6 py-3 text-right font-bold">موجودی اولیه</th>
+                    <th className="px-6 py-3 text-right font-bold">موجودی فعلی</th>
+                    <th className="px-6 py-3 text-right font-bold">انقضا</th>
+                    <th className="px-6 py-3 text-right font-bold">تعداد سفارشِ استفاده‌کننده</th>
+                    <th className="px-6 py-3 text-right font-bold">وضعیت</th>
+                    <th className="px-6 py-3 text-center font-bold">عملیات</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {giftCards.map(g => (
+                    <tr key={g.id} className="hover:bg-gray-50">
+                      <td className="px-6 py-3 font-mono font-semibold text-gray-800" dir="ltr">{g.code}</td>
+                      <td className="px-6 py-3 text-gray-500" dir="ltr">{formatCurrency(g.initialBalance)}</td>
+                      <td className="px-6 py-3 font-semibold text-gray-800" dir="ltr">{formatCurrency(g.currentBalance)}</td>
+                      <td className="px-6 py-3 text-gray-500">
+                        {g.expiresAt ? new Date(g.expiresAt).toLocaleDateString('fa-IR') : 'بدون انقضا'}
+                      </td>
+                      <td className="px-6 py-3 text-gray-500">{toPersianDigits(g._count.orders)}</td>
+                      <td className="px-6 py-3">
+                        <span className={`text-xs font-bold px-2 py-1 rounded-full ${g.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                          {g.isActive ? 'فعال' : 'غیرفعال'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-3 text-center">
+                        {g.isActive && (
+                          <button
+                            onClick={() => handleDeactivateGiftCard(g.id)}
+                            className="text-red-600 hover:text-red-800 bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-md transition-colors text-xs font-semibold"
+                          >
+                            غیرفعال‌سازی
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* -------------------- COUPONS TAB (فاز ۱۴) -------------------- */}
+      {activeTab === 'coupons' && (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-300">
+          <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+            <div>
+              <h2 className="text-lg font-bold text-gray-800">کدهای تخفیف</h2>
+              <p className="text-xs text-gray-500 mt-0.5">کد تخفیفِ درصدی یا مبلغ ثابت، با حداقل مبلغ سفارش و سقفِ اختیاریِ تعداد استفاده</p>
+            </div>
+            <button
+              onClick={openNewCouponModal}
+              className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition-all shadow-sm hover:shadow flex items-center gap-2 text-sm"
+            >
+              ➕ کد تخفیف جدید
+            </button>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+            {isLoadingCoupons ? (
+              <div className="text-center text-gray-500 text-sm py-10 animate-pulse">درحال بارگذاری...</div>
+            ) : coupons.length === 0 ? (
+              <div className="text-center text-gray-400 text-sm py-10">هنوز کد تخفیفی ثبت نشده است.</div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-gray-500 text-xs">
+                  <tr>
+                    <th className="px-6 py-3 text-right font-bold">کد</th>
+                    <th className="px-6 py-3 text-right font-bold">نوع/مقدار</th>
+                    <th className="px-6 py-3 text-right font-bold">حداقل سفارش</th>
+                    <th className="px-6 py-3 text-right font-bold">استفاده/سقف</th>
+                    <th className="px-6 py-3 text-right font-bold">انقضا</th>
+                    <th className="px-6 py-3 text-right font-bold">وضعیت</th>
+                    <th className="px-6 py-3 text-center font-bold">عملیات</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {coupons.map(c => (
+                    <tr key={c.id} className="hover:bg-gray-50">
+                      <td className="px-6 py-3 font-mono font-semibold text-gray-800" dir="ltr">{c.code}</td>
+                      <td className="px-6 py-3 text-gray-500" dir="ltr">
+                        {c.discountType === 'PERCENT' ? `${toPersianDigits(c.value)}٪` : formatCurrency(c.value)}
+                      </td>
+                      <td className="px-6 py-3 text-gray-500" dir="ltr">{formatCurrency(c.minOrderAmount)}</td>
+                      <td className="px-6 py-3 text-gray-500" dir="ltr">
+                        {toPersianDigits(c.usesCount)} / {c.maxUses != null ? toPersianDigits(c.maxUses) : '∞'}
+                      </td>
+                      <td className="px-6 py-3 text-gray-500">
+                        {c.expiresAt ? new Date(c.expiresAt).toLocaleDateString('fa-IR') : 'بدون انقضا'}
+                      </td>
+                      <td className="px-6 py-3">
+                        <button
+                          onClick={() => handleToggleCouponActive(c)}
+                          className={`text-xs font-bold px-2 py-1 rounded-full transition-colors ${c.isActive ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
+                        >
+                          {c.isActive ? 'فعال' : 'غیرفعال'}
+                        </button>
+                      </td>
+                      <td className="px-6 py-3 text-center">
+                        <button
+                          onClick={() => openEditCouponModal(c)}
+                          className="text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-md transition-colors text-xs font-semibold ml-2"
+                        >
+                          ویرایش
+                        </button>
+                        <button
+                          onClick={() => handleDeleteCoupon(c.id)}
+                          className="text-red-600 hover:text-red-800 bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-md transition-colors text-xs font-semibold"
+                        >
+                          حذف
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* -------------------- RECIPE MODAL (For Cost Analysis Tab) -------------------- */}
       {isRecipeModalOpen && activeTab === 'costing' && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -2116,6 +2476,181 @@ export default function AdminPage() {
                 className="px-5 py-2 rounded-lg text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-60 transition-colors"
               >
                 {isSavingModifierGroup ? 'درحال ذخیره...' : 'ذخیره گروه مدیفایر'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* -------------------- GIFT CARD MODAL (فاز ۱۴) -------------------- */}
+      {isGiftCardModalOpen && activeTab === 'giftcards' && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200">
+            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+              <h3 className="font-bold text-gray-900">صدور کارت هدیه جدید</h3>
+              <button onClick={closeGiftCardModal} className="text-gray-400 hover:text-gray-700 text-xl leading-none">✕</button>
+            </div>
+
+            <div className="p-6 overflow-y-auto flex-1 space-y-4">
+              {giftCardError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3">{giftCardError}</div>
+              )}
+              <div>
+                <label className="block text-xs font-bold text-gray-600 mb-1">مبلغ اولیه (تومان)</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={giftCardInitialBalance || ''}
+                  onChange={e => setGiftCardInitialBalance(parseFloat(e.target.value) || 0)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-left outline-none focus:border-blue-500"
+                  dir="ltr"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-600 mb-1">کد سفارشی (اختیاری — خالی بگذارید تا خودکار ساخته شود)</label>
+                <input
+                  type="text"
+                  value={giftCardCodeInput}
+                  onChange={e => setGiftCardCodeInput(e.target.value.toUpperCase())}
+                  placeholder="مثلاً NEWYEAR2026"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-left outline-none focus:border-blue-500"
+                  dir="ltr"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-600 mb-1">تاریخ انقضا (اختیاری)</label>
+                <input
+                  type="date"
+                  value={giftCardExpiresAt}
+                  onChange={e => setGiftCardExpiresAt(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-left outline-none focus:border-blue-500"
+                  dir="ltr"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-600 mb-1">یادداشت (اختیاری)</label>
+                <textarea
+                  value={giftCardNote}
+                  onChange={e => setGiftCardNote(e.target.value)}
+                  rows={2}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500"
+                />
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
+              <button onClick={closeGiftCardModal} className="px-4 py-2 rounded-lg text-sm font-bold text-gray-600 hover:bg-gray-200 transition-colors">
+                انصراف
+              </button>
+              <button
+                onClick={handleIssueGiftCard}
+                disabled={isSavingGiftCard || giftCardInitialBalance <= 0}
+                className="px-5 py-2 rounded-lg text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-60 transition-colors"
+              >
+                {isSavingGiftCard ? 'درحال صدور...' : 'صدور کارت هدیه'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* -------------------- COUPON MODAL (فاز ۱۴) -------------------- */}
+      {isCouponModalOpen && activeTab === 'coupons' && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200">
+            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+              <h3 className="font-bold text-gray-900">{editingCouponId ? 'ویرایش کد تخفیف' : 'کد تخفیف جدید'}</h3>
+              <button onClick={closeCouponModal} className="text-gray-400 hover:text-gray-700 text-xl leading-none">✕</button>
+            </div>
+
+            <div className="p-6 overflow-y-auto flex-1 space-y-4">
+              {couponError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3">{couponError}</div>
+              )}
+              <div>
+                <label className="block text-xs font-bold text-gray-600 mb-1">کد تخفیف</label>
+                <input
+                  type="text"
+                  value={couponCodeInput}
+                  onChange={e => setCouponCodeInput(e.target.value.toUpperCase())}
+                  placeholder="مثلاً WELCOME10"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-left outline-none focus:border-blue-500"
+                  dir="ltr"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-gray-600 mb-1">نوع تخفیف</label>
+                  <select
+                    value={couponDiscountType}
+                    onChange={e => setCouponDiscountType(e.target.value as CouponDiscountType)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white outline-none focus:border-blue-500"
+                  >
+                    <option value="PERCENT">درصدی</option>
+                    <option value="FIXED">مبلغ ثابت</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-600 mb-1">
+                    {couponDiscountType === 'PERCENT' ? 'درصد تخفیف' : 'مبلغ تخفیف (تومان)'}
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={couponValue || ''}
+                    onChange={e => setCouponValue(parseFloat(e.target.value) || 0)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-left outline-none focus:border-blue-500"
+                    dir="ltr"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-gray-600 mb-1">حداقل مبلغ سفارش (تومان)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={couponMinOrderAmount || ''}
+                    onChange={e => setCouponMinOrderAmount(parseFloat(e.target.value) || 0)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-left outline-none focus:border-blue-500"
+                    dir="ltr"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-600 mb-1">حداکثر تعداد استفاده (اختیاری)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={couponMaxUses}
+                    onChange={e => setCouponMaxUses(e.target.value)}
+                    placeholder="نامحدود"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-left outline-none focus:border-blue-500"
+                    dir="ltr"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-600 mb-1">تاریخ انقضا (اختیاری)</label>
+                <input
+                  type="date"
+                  value={couponExpiresAt}
+                  onChange={e => setCouponExpiresAt(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-left outline-none focus:border-blue-500"
+                  dir="ltr"
+                />
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
+              <button onClick={closeCouponModal} className="px-4 py-2 rounded-lg text-sm font-bold text-gray-600 hover:bg-gray-200 transition-colors">
+                انصراف
+              </button>
+              <button
+                onClick={handleSaveCoupon}
+                disabled={isSavingCoupon || !couponCodeInput.trim() || couponValue <= 0}
+                className="px-5 py-2 rounded-lg text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-60 transition-colors"
+              >
+                {isSavingCoupon ? 'درحال ذخیره...' : 'ذخیره کد تخفیف'}
               </button>
             </div>
           </div>

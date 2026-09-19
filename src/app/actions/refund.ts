@@ -233,6 +233,22 @@ export async function createRefund(input: CreateRefundInput) {
       // 4. ثبت خودکار تراکنش EXPENSE مقابل — تراکنش INCOME اصلیِ سفارش هرگز
       // حذف/ویرایش نمی‌شود (قاعده‌ی فاز ۷)؛ این تراکنش جدید همان اثر خالص
       // را در گزارش‌های حسابداری (سود خالص، مالیات خالص) ایجاد می‌کند.
+      //
+      // فاز ۱۹ (بازخورد/بهبود): تراکنشِ EXPENSEِ مرجوعی به همان حسابِ
+      // جریان‌نقدی‌ای وصل می‌شود که تراکنشِ INCOME اصلیِ همین سفارش به آن
+      // وصل بود (نقد/بانک/درگاه — فاز ۱۸). پیش از این اصلاح، این اتصال
+      // هرگز برقرار نمی‌شد، پس مثلاً مرجوعیِ یک سفارشِ نقدی هیچ‌وقت از
+      // مانده‌ی «صندوق نقد» کسر نمی‌شد — یک ناسازگاری که ویژگیِ
+      // مغایرت‌گیریِ فاز ۱۸ را برای سفارش‌های مرجوع‌شده نادرست می‌کرد؛ اینجا
+      // برخلاف تصمیم‌های محدوده‌ی آگاهانه‌ی «بدون‌حساب ماندنِ» خرید کالا/حقوق
+      // (که هرگز به یک حسابِ پرداختِ مشخص متصل نبودند)، سفارش همیشه دقیقاً
+      // می‌داند از کدام حساب پرداخت شده، پس نگه‌داشتنِ آن اتصال هنگامِ
+      // برگشتش یک نقصِ واقعی بود، نه یک تصمیمِ محدوده.
+      const originalIncomeTx = await tx.transaction.findFirst({
+        where: { referenceType: 'ORDER', referenceId: order.id, type: 'INCOME' },
+        select: { accountId: true },
+      });
+
       await tx.transaction.create({
         data: {
           type: 'EXPENSE',
@@ -241,6 +257,7 @@ export async function createRefund(input: CreateRefundInput) {
           taxAmount: refundTax,
           branchId: order.branchId,
           categoryId: SYSTEM_CATEGORY_IDS.EXPENSE_REFUND,
+          accountId: originalIncomeTx?.accountId ?? null,
           referenceType: 'REFUND',
           referenceId: createdRefund.id,
           createdByUserId: auth.user.id,

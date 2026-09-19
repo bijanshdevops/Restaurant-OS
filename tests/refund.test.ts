@@ -145,6 +145,42 @@ describe('مرجوعی و استرداد سفارش (فاز ۱۰)', () => {
       expect(refundTx.amount).toBeCloseTo(refundRes.refund.totalAmount, 0);
       expect(refundTx.taxAmount).toBeCloseTo(refundRes.refund.taxAmount, 0);
     });
+
+    it('فاز ۱۹: تراکنش EXPENSE مرجوعی به همان حساب جریان‌نقدیِ تراکنش INCOME اصلی سفارش وصل می‌شود', async () => {
+      const item = await makeMenuItem(admin, 45000);
+      // پرداخت با کارت، تا تراکنش INCOME به حساب «بانک» (نه پیش‌فرض «صندوق نقد») وصل شود
+      const orderRes = await admin.call(
+        'createOrder',
+        [{ menuItemId: item.id, quantity: 1 }],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'CARD'
+      );
+      expect(orderRes.success).toBe(true);
+      await completeOrder(admin, orderRes.order.id);
+
+      const refundRes = await admin.call('createRefund', {
+        orderId: orderRes.order.id,
+        isFullRefund: true,
+        reason: 'تست اتصال حساب',
+      });
+      expect(refundRes.success).toBe(true);
+
+      const txRes = await admin.call('getTransactions', {});
+      expect(txRes.success).toBe(true);
+
+      const incomeTx = txRes.transactions.find(
+        (t: any) => t.referenceType === 'ORDER' && t.referenceId === orderRes.order.id
+      );
+      const refundTx = txRes.transactions.find(
+        (t: any) => t.referenceType === 'REFUND' && t.referenceId === refundRes.refund.id
+      );
+      expect(incomeTx.accountId).toBe('txacc-bank');
+      expect(refundTx.accountId).toBe('txacc-bank');
+      expect(refundTx.accountId).toBe(incomeTx.accountId);
+    });
   });
 
   describe('مرجوعی جزئی: تسهیم تناسبی مالیات و جلوگیری از مرجوعی بیش از حد', () => {

@@ -615,6 +615,26 @@ Covered end-to-end by `tests/cashFlowAccounts.test.ts` (system-account seeding, 
 
 ---
 
+## Codebase Review & Bug Fix: Refund Cash-Flow Account Linking (Phase 19)
+
+Per the user's confirmed scope, Phase 19 was not a new feature — it was a self-directed review of the existing codebase to find and fix real defects, rather than targeting any specific user-reported problem. The review focused on the highest-risk files first: every action module that books money (`order.ts`, `accounting.ts`, `refund.ts`, `deliveryProvider.ts`, `reservation.ts`, `giftCard.ts`, and the payroll section of `staffSchedule.ts`) was read in full. One genuine, previously-undisclosed bug was found and fixed; the rest of the reviewed files were sound.
+
+### The bug
+
+`createRefund` books an automatic `EXPENSE` transaction that reverses a refunded order's original `INCOME` transaction — but it never set that `EXPENSE` transaction's `accountId`. Phase 18 always links an order's `INCOME` transaction to a specific cash-flow account (cash till, bank, or gateway, depending on how the order was paid), precisely so `computeAccountBalances`/reconciliation can show what's actually in each account. Because the refund's `EXPENSE` transaction was left unlinked, refunding a cash order never reduced the "صندوق نقد" (cash till) balance Phase 18 computes — silently breaking that phase's accuracy for every refunded order.
+
+### Why this is a bug, not a disclosed scope decision
+
+Phase 18 deliberately leaves purchase-order receipts and payroll runs posting with no `accountId` ("unclassified") by default — that's a disclosed scope decision, because those transactions never had a specific payment-method concept to begin with. A refund is different: the order it reverses always has a known account (Phase 18 set it at order time), so failing to carry that same account onto the reversing transaction is a plain asymmetry/oversight, not a considered scope choice.
+
+### The fix
+
+`createRefund` now looks up the original order's `INCOME` transaction (`referenceType: 'ORDER'`, `referenceId: order.id`) inside the same `$transaction`, reads its `accountId`, and sets that same `accountId` on the refund's `EXPENSE` transaction — so a cash refund reduces the cash-till balance, a card refund reduces the bank balance, and a gateway refund reduces the gateway balance, exactly mirroring how the original sale was recorded.
+
+Covered by a new regression test in `tests/refund.test.ts`, which creates a card-paid order, completes and fully refunds it, and asserts the refund's `EXPENSE` transaction carries the exact same `accountId` as the order's original `INCOME` transaction.
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, review process, and branching model.
